@@ -1,0 +1,28 @@
+{
+  "name": "opencode-codex-lb-switcher",
+  "version": "0.1.0",
+  "description": "Toggle OpenCode between native OpenAI and codex-lb with automatic reload.",
+  "type": "module",
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js",
+    "./server": "./index.js",
+    "./tui": "./tui.js"
+  },
+  "files": [
+    "index.js",
+    "tui.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test"
+  },
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "codex-lb",
+    "openai"
+  ],
+  "license": "MIT"
+}
