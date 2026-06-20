@@ -63,17 +63,25 @@ export function sidebarSessionID(api, props = {}) {
 
 const solidView = { createElement, insert, setProp }
 
-function textNode(value, props = {}, view = solidView) {
-  const element = view.createElement("text")
-  for (const [key, prop] of Object.entries(props)) view.setProp(element, key, prop)
-  view.insert(element, value)
+function elementNode(type, props = {}, children = [], view = solidView) {
+  const element = view.createElement(type)
+  for (const [key, prop] of Object.entries(props)) {
+    if (prop !== undefined) view.setProp(element, key, prop)
+  }
+  for (const child of children) {
+    if (child !== null && child !== undefined && child !== false) view.insert(element, child)
+  }
   return element
+}
+
+function textNode(value, props = {}, view = solidView) {
+  return elementNode("text", props, [value], view)
 }
 
 export function createSidebarStatusElement(api, mode, view = solidView) {
   const theme = api.theme?.current ?? {}
   const detailColor = mode === "codex-lb" ? theme.success : theme.textMuted
-  return textNode(`Codex LB: ${sidebarStatusText(mode)}`, { fg: detailColor }, view)
+  return elementNode("box", { width: "100%", flexDirection: "column" }, [textNode(`Codex LB: ${sidebarStatusText(mode)}`, { fg: detailColor }, view)], view)
 }
 
 async function applyMode(api, directory, mode, stateRoot) {

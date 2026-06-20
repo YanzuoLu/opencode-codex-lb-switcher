@@ -909,9 +909,15 @@ test("sidebar status builds a real element shape for OpenAI sessions", async () 
   const rendered = createSidebarStatusElement(api, "codex-lb", view)
 
   assert.deepEqual(rendered, {
-    type: "text",
-    props: { fg: "success" },
-    children: ["Codex LB: routing via codex-lb"],
+    type: "box",
+    props: { width: "100%", flexDirection: "column" },
+    children: [
+      {
+        type: "text",
+        props: { fg: "success" },
+        children: ["Codex LB: routing via codex-lb"],
+      },
+    ],
   })
 })
 
