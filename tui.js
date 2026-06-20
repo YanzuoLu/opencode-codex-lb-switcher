@@ -68,18 +68,8 @@ function textNode(value, props = {}, view = solidView) {
 
 export function createSidebarStatusElement(api, mode, view = solidView) {
   const theme = api.theme?.current ?? {}
-  const container = view.createElement("box")
-  const title = view.createElement("text")
-  const titleBold = view.createElement("b")
   const detailColor = mode === "codex-lb" ? theme.success : theme.textMuted
-
-  view.setProp(container, "flexDirection", "column")
-  view.setProp(title, "fg", theme.text)
-  view.insertNode(titleBold, view.createTextNode("Codex LB"))
-  view.insertNode(title, titleBold)
-  view.insertNode(container, title)
-  view.insertNode(container, textNode(`  ${sidebarStatusText(mode)}`, { fg: detailColor }, view))
-  return container
+  return textNode(`Codex LB: ${sidebarStatusText(mode)}`, { fg: detailColor }, view)
 }
 
 async function applyMode(api, directory, mode, stateRoot) {
