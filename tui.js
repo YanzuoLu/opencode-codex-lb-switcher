@@ -57,6 +57,10 @@ export function isOpenAISession(api, sessionID) {
   return true
 }
 
+export function sidebarSessionID(api, props = {}) {
+  return props.session_id ?? currentSessionID(api)
+}
+
 const solidView = { createElement, insert, setProp }
 
 function textNode(value, props = {}, view = solidView) {
@@ -181,7 +185,8 @@ export async function registerSidebarStatus(api, { directory, stateRoot }) {
     order: 160,
     slots: {
       sidebar_content(_ctx, props = {}) {
-        if (!isOpenAISession(api, props.session_id)) return null
+        const sessionID = sidebarSessionID(api, props)
+        if (!isOpenAISession(api, sessionID)) return null
         return createSidebarStatusElement(api, mode)
       },
     },

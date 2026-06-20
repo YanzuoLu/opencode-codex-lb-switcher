@@ -850,6 +850,13 @@ test("sidebar status renders only for OpenAI sessions", async () => {
   }
 })
 
+test("sidebar status uses current route session when slot props are empty", async () => {
+  const { sidebarSessionID } = await import("../tui.js")
+  const api = makeTuiApi("/tmp/worktree")
+
+  assert.equal(sidebarSessionID(api), "ses")
+})
+
 test("sidebar status detects OpenAI provider from session messages", async () => {
   const { isOpenAISession } = await import("../tui.js")
   const api = makeTuiApi(
