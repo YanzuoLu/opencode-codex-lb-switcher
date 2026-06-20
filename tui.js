@@ -64,14 +64,18 @@ let defaultSolidView
 async function loadSolidView() {
   if (defaultSolidView) return defaultSolidView
   let solid
+  let solidJs
   if (typeof Bun !== "undefined") {
     await import("@opentui/solid/runtime-plugin-support")
     solid = await import("opentui:runtime-module:%40opentui%2Fsolid")
+    solidJs = await import("opentui:runtime-module:solid-js")
   } else {
     solid = await import("@opentui/solid")
+    solidJs = await import("solid-js")
   }
   const { createElement, insert, setProp } = solid
-  defaultSolidView = { createElement, insert, setProp }
+  const { createSignal } = solidJs
+  defaultSolidView = { createElement, createSignal, insert, setProp }
   return defaultSolidView
 }
 
@@ -185,7 +189,17 @@ export async function registerSidebarStatus(api, { directory, stateRoot, view: r
   if (typeof api.slots?.register !== "function") return () => {}
 
   const view = runtimeView ?? (await loadSolidView())
-  let mode = await readMode(directory, stateRoot)
+  const initialMode = await readMode(directory, stateRoot)
+  let fallbackMode = initialMode
+  const [mode, setMode] =
+    typeof view.createSignal === "function"
+      ? view.createSignal(initialMode)
+      : [
+          () => fallbackMode,
+          (nextMode) => {
+            fallbackMode = nextMode
+          },
+        ]
   let disposed = false
   let inFlight = false
 
@@ -194,8 +208,8 @@ export async function registerSidebarStatus(api, { directory, stateRoot, view: r
     inFlight = true
     try {
       const next = await readMode(directory, stateRoot)
-      if (next !== mode) {
-        mode = next
+      if (next !== mode()) {
+        setMode(next)
         requestRender(api)
       }
     } finally {
@@ -209,7 +223,7 @@ export async function registerSidebarStatus(api, { directory, stateRoot, view: r
       sidebar_content(_ctx, props = {}) {
         const sessionID = sidebarSessionID(api, props)
         if (!isOpenAISession(api, sessionID)) return null
-        return createSidebarStatusElement(api, mode, view)
+        return createSidebarStatusElement(api, mode(), view)
       },
     },
   })

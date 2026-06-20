@@ -149,6 +149,23 @@ function makeOpenTuiView() {
   }
 }
 
+function makeReactiveOpenTuiView() {
+  const view = makeOpenTuiView()
+  view.signals = []
+  view.createSignal = (initial) => {
+    let value = initial
+    const calls = []
+    const getter = () => value
+    const setter = (next) => {
+      value = next
+      calls.push(next)
+    }
+    view.signals.push({ getter, setter, calls })
+    return [getter, setter]
+  }
+  return view
+}
+
 function assertOpenCodeV1PluginShape(value, kind) {
   if (!value || typeof value !== "object") throw new TypeError(`Plugin must default export an object with ${kind}()`)
   if (value.server !== undefined && typeof value.server !== "function") throw new TypeError("invalid server export")
@@ -865,6 +882,29 @@ test("registerSidebarStatus renders status with injected OpenTUI view", async ()
 
     assert.equal(rendered.type, "box")
     assert.equal(rendered.children[0].children[0], "Codex LB: native OpenAI")
+  } finally {
+    for (const dispose of api?.disposers ?? []) dispose()
+    await rm(dir, { recursive: true, force: true })
+    await rm(stateRoot, { recursive: true, force: true })
+  }
+})
+
+test("registerSidebarStatus updates mode through a Solid signal", async () => {
+  const dir = await tempDir()
+  const stateRoot = await tempDir()
+  let api
+  try {
+    const { registerSidebarStatus } = await import("../tui.js")
+    const view = makeReactiveOpenTuiView()
+    api = makeTuiApi(dir)
+    await registerSidebarStatus(api, { directory: dir, stateRoot, view })
+
+    assert.equal(view.signals[0].getter(), "openai")
+
+    await writeMode(dir, "codex-lb", stateRoot)
+    await new Promise((resolve) => setTimeout(resolve, 1100))
+
+    assert.deepEqual(view.signals[0].calls, ["codex-lb"])
   } finally {
     for (const dispose of api?.disposers ?? []) dispose()
     await rm(dir, { recursive: true, force: true })
