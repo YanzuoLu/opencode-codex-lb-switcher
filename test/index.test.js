@@ -45,6 +45,7 @@ function makeTuiApi(
   directory,
   statusBySession = new Map([["ses", { type: "idle" }]]),
   sessionByID = new Map([["ses", { model: { providerID: "openai" } }]]),
+  messagesBySession = new Map(),
 ) {
   const commands = []
   const events = new Map()
@@ -67,6 +68,9 @@ function makeTuiApi(
         },
         status(sessionID) {
           return statusBySession.get(sessionID)
+        },
+        messages(sessionID) {
+          return messagesBySession.get(sessionID) ?? []
         },
       },
     },
@@ -844,6 +848,18 @@ test("sidebar status renders only for OpenAI sessions", async () => {
     await rm(dir, { recursive: true, force: true })
     await rm(stateRoot, { recursive: true, force: true })
   }
+})
+
+test("sidebar status detects OpenAI provider from session messages", async () => {
+  const { isOpenAISession } = await import("../tui.js")
+  const api = makeTuiApi(
+    "/tmp/worktree",
+    new Map([["ses", { type: "idle" }]]),
+    new Map([["ses", { id: "ses" }]]),
+    new Map([["ses", [{ role: "assistant", providerID: "openai", modelID: "gpt-5.5" }]]]),
+  )
+
+  assert.equal(isOpenAISession(api, "ses"), true)
 })
 
 test("sidebar status builds a real element shape for OpenAI sessions", async () => {

@@ -34,9 +34,19 @@ function requestRender(api) {
   api.renderer?.requestRender?.()
 }
 
-function isOpenAISession(api, sessionID) {
+function messageProviderID(message) {
+  return message?.providerID ?? message?.model?.providerID
+}
+
+export function isOpenAISession(api, sessionID) {
   if (!sessionID) return false
-  return api.state?.session?.get?.(sessionID)?.model?.providerID === "openai"
+  if (api.state?.session?.get?.(sessionID)?.model?.providerID === "openai") return true
+  const messages = api.state?.session?.messages?.(sessionID) ?? []
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const providerID = messageProviderID(messages[index])
+    if (providerID) return providerID === "openai"
+  }
+  return false
 }
 
 const solidView = { createElement, createTextNode, insertNode, setProp }
