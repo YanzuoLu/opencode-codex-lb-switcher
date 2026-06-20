@@ -197,8 +197,4 @@ export async function server({ directory }, rawOptions, testOptions = {}) {
 export default {
   id: SERVICE,
   server,
-  async tui(...args) {
-    const mod = await import("./tui.js")
-    return mod.tui(...args)
-  },
 }

@@ -20,8 +20,8 @@ export function isSessionBusy(api, sessionID) {
   return status?.type !== "idle"
 }
 
-function showToast(api, variant, title, description) {
-  api.ui?.toast?.({ variant, title, description })
+function showToast(api, variant, title, message) {
+  api.ui?.toast?.({ variant, title, message })
 }
 
 function requestRender(api) {
@@ -48,9 +48,11 @@ export async function registerCodexLbCommand(api, { directory, stateRoot }) {
 
   const unregisterCommand = api.command.register(() => [
     {
+      title: "Toggle codex-lb",
+      value: COMMAND,
+      description: "Toggle codex-lb mode",
       slash: {
         name: COMMAND,
-        description: "Toggle codex-lb mode",
       },
       async onSelect() {
         const mode = await readMode(directory, stateRoot)

@@ -19,7 +19,7 @@ import plugin, {
   rewriteCodexLbURL,
   writeMode,
 } from "../index.js"
-import { indicatorText, registerCodexLbCommand } from "../tui.js"
+import tuiPlugin, { indicatorText, registerCodexLbCommand } from "../tui.js"
 
 async function tempDir() {
   return mkdtemp(join(tmpdir(), "oc-clb-"))
@@ -102,6 +102,15 @@ function makeTuiApi(directory, statusBySession = new Map([["ses", { type: "idle"
   }
 }
 
+function assertOpenCodeV1PluginShape(value, kind) {
+  if (!value || typeof value !== "object") throw new TypeError(`Plugin must default export an object with ${kind}()`)
+  if (value.server !== undefined && typeof value.server !== "function") throw new TypeError("invalid server export")
+  if (value.tui !== undefined && typeof value.tui !== "function") throw new TypeError("invalid tui export")
+  if (value.server !== undefined && value.tui !== undefined) throw new TypeError("must default export either server() or tui(), not both")
+  if (kind === "server" && value.server === undefined) throw new TypeError("missing server")
+  if (kind === "tui" && value.tui === undefined) throw new TypeError("missing tui")
+}
+
 test("normalizeOptions accepts only baseURL and apiKey", () => {
   assert.deepEqual(normalizeOptions({ baseURL: "http://127.0.0.1:2455/v1/", apiKey: " sk " }), {
     baseURL: "http://127.0.0.1:2455/v1",
@@ -131,9 +140,13 @@ test("toggleMode flips between openai and codex-lb", () => {
   assert.equal(toggleMode("codex-lb"), "openai")
 })
 
-test("root plugin entry exposes both server and tui hooks", () => {
+test("server and TUI plugin entries are separate OpenCode modules", () => {
   assert.equal(plugin.server, server)
-  assert.equal(typeof plugin.tui, "function")
+  assert.equal(plugin.tui, undefined)
+  assert.equal(tuiPlugin.server, undefined)
+  assert.equal(typeof tuiPlugin.tui, "function")
+  assert.doesNotThrow(() => assertOpenCodeV1PluginShape(plugin, "server"))
+  assert.doesNotThrow(() => assertOpenCodeV1PluginShape(tuiPlugin, "tui"))
 })
 
 test("createCodexLbFetch rewrites v1 URLs and injects bearer auth", async () => {
@@ -511,7 +524,11 @@ test("registerCodexLbCommand registers action-only slash command", async () => {
     await registerCodexLbCommand(api, { directory: dir, stateRoot })
 
     const command = api.commands[0]()[0]
+    assert.equal(command.title, "Toggle codex-lb")
+    assert.equal(command.value, COMMAND)
+    assert.equal(command.description, "Toggle codex-lb mode")
     assert.equal(command.slash.name, COMMAND)
+    assert.equal(command.slash.description, undefined)
     assert.equal(typeof command.onSelect, "function")
   } finally {
     await rm(dir, { recursive: true, force: true })
@@ -531,6 +548,8 @@ test("registerCodexLbCommand toggles immediately when current session is idle", 
 
     assert.equal(await readMode(dir, stateRoot), "codex-lb")
     assert.equal(api.toasts[0].variant, "success")
+    assert.equal(api.toasts[0].message, "codex-lb mode enabled")
+    assert.equal("description" in api.toasts[0], false)
     assert.equal(api.renders.length, 1)
   } finally {
     await rm(dir, { recursive: true, force: true })
@@ -550,6 +569,8 @@ test("registerCodexLbCommand queues while current session is busy until matching
     await command.onSelect()
     assert.equal(await readMode(dir, stateRoot), "openai")
     assert.equal(api.toasts[0].variant, "info")
+    assert.equal(api.toasts[0].message, "Switch queued until this session is idle")
+    assert.equal("description" in api.toasts[0], false)
 
     await api.events.get("session.idle")({ properties: { sessionID: "other" } })
     assert.equal(await readMode(dir, stateRoot), "openai")
