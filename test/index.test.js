@@ -135,6 +135,20 @@ function makeKeymapTuiApi(directory, statusBySession = new Map([["ses", { type: 
   return api
 }
 
+function makeOpenTuiView() {
+  return {
+    createElement(type) {
+      return { type, props: {}, children: [] }
+    },
+    insert(parent, child) {
+      parent.children.push(child)
+    },
+    setProp(element, key, value) {
+      element.props[key] = value
+    },
+  }
+}
+
 function assertOpenCodeV1PluginShape(value, kind) {
   if (!value || typeof value !== "object") throw new TypeError(`Plugin must default export an object with ${kind}()`)
   if (value.server !== undefined && typeof value.server !== "function") throw new TypeError("invalid server export")
@@ -838,6 +852,26 @@ test("registerSidebarStatus registers sidebar_content slot", async () => {
   }
 })
 
+test("registerSidebarStatus renders status with injected OpenTUI view", async () => {
+  const dir = await tempDir()
+  const stateRoot = await tempDir()
+  let api
+  try {
+    const { registerSidebarStatus } = await import("../tui.js")
+    api = makeTuiApi(dir)
+    await registerSidebarStatus(api, { directory: dir, stateRoot, view: makeOpenTuiView() })
+
+    const rendered = api.slotRegistrations[0].slots.sidebar_content({}, { session_id: "ses" })
+
+    assert.equal(rendered.type, "box")
+    assert.equal(rendered.children[0].children[0], "Codex LB: native OpenAI")
+  } finally {
+    for (const dispose of api?.disposers ?? []) dispose()
+    await rm(dir, { recursive: true, force: true })
+    await rm(stateRoot, { recursive: true, force: true })
+  }
+})
+
 test("sidebar status renders only for OpenAI sessions", async () => {
   const dir = await tempDir()
   const stateRoot = await tempDir()
@@ -894,17 +928,7 @@ test("sidebar status stays visible when OpenCode has no provider signal", async 
 test("sidebar status builds a real element shape for OpenAI sessions", async () => {
   const { createSidebarStatusElement } = await import("../tui.js")
   const api = makeTuiApi("/tmp/worktree")
-  const view = {
-    createElement(type) {
-      return { type, props: {}, children: [] }
-    },
-    insert(parent, child) {
-      parent.children.push(child)
-    },
-    setProp(element, key, value) {
-      element.props[key] = value
-    },
-  }
+  const view = makeOpenTuiView()
 
   const rendered = createSidebarStatusElement(api, "codex-lb", view)
 

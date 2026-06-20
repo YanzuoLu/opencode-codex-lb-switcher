@@ -1,5 +1,3 @@
-import { createElement, insert, setProp } from "@opentui/solid"
-
 import { COMMAND, readMode, toggleMode, writeMode } from "./index.js"
 
 const SERVICE = "opencode-codex-lb-switcher"
@@ -61,9 +59,17 @@ export function sidebarSessionID(api, props = {}) {
   return props.session_id ?? currentSessionID(api)
 }
 
-const solidView = { createElement, insert, setProp }
+let defaultSolidView
 
-function elementNode(type, props = {}, children = [], view = solidView) {
+async function loadSolidView() {
+  if (defaultSolidView) return defaultSolidView
+  if (typeof Bun !== "undefined") await import("@opentui/solid/runtime-plugin-support")
+  const { createElement, insert, setProp } = await import("@opentui/solid")
+  defaultSolidView = { createElement, insert, setProp }
+  return defaultSolidView
+}
+
+function elementNode(type, props = {}, children = [], view = defaultSolidView) {
   const element = view.createElement(type)
   for (const [key, prop] of Object.entries(props)) {
     if (prop !== undefined) view.setProp(element, key, prop)
@@ -74,11 +80,12 @@ function elementNode(type, props = {}, children = [], view = solidView) {
   return element
 }
 
-function textNode(value, props = {}, view = solidView) {
+function textNode(value, props = {}, view = defaultSolidView) {
   return elementNode("text", props, [value], view)
 }
 
-export function createSidebarStatusElement(api, mode, view = solidView) {
+export function createSidebarStatusElement(api, mode, view = defaultSolidView) {
+  if (!view) throw new Error(`${SERVICE}: TUI runtime is not initialized`)
   const theme = api.theme?.current ?? {}
   const detailColor = mode === "codex-lb" ? theme.success : theme.textMuted
   return elementNode("box", { width: "100%", flexDirection: "column" }, [textNode(`Codex LB: ${sidebarStatusText(mode)}`, { fg: detailColor }, view)], view)
@@ -168,9 +175,10 @@ export async function registerCodexLbCommand(api, { directory, stateRoot }) {
   }
 }
 
-export async function registerSidebarStatus(api, { directory, stateRoot }) {
+export async function registerSidebarStatus(api, { directory, stateRoot, view: runtimeView }) {
   if (typeof api.slots?.register !== "function") return () => {}
 
+  const view = runtimeView ?? (await loadSolidView())
   let mode = await readMode(directory, stateRoot)
   let disposed = false
   let inFlight = false
@@ -195,7 +203,7 @@ export async function registerSidebarStatus(api, { directory, stateRoot }) {
       sidebar_content(_ctx, props = {}) {
         const sessionID = sidebarSessionID(api, props)
         if (!isOpenAISession(api, sessionID)) return null
-        return createSidebarStatusElement(api, mode)
+        return createSidebarStatusElement(api, mode, view)
       },
     },
   })
