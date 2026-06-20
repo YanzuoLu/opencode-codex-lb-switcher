@@ -139,18 +139,6 @@ export async function tui(api) {
     disposed = true
     clearInterval(timer)
   })
-
-  api.slots.register({
-    order: 900,
-    slots: {
-      home_prompt_right() {
-        return indicatorText(mode)
-      },
-      session_prompt_right() {
-        return indicatorText(mode)
-      },
-    },
-  })
 }
 
 export default {

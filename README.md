@@ -4,7 +4,7 @@ Toggle an OpenCode workspace between native OpenAI mode and codex-lb mode with o
 
 ## Usage
 
-Add one plugin entry to `opencode.json`:
+Add the server plugin entry with options to `opencode.json`:
 
 ```jsonc
 {
@@ -21,9 +21,21 @@ Add one plugin entry to `opencode.json`:
 }
 ```
 
-Restart OpenCode after changing `opencode.json`; plugins are loaded at startup.
+OpenCode 1.17.8 also needs the TUI target listed in `tui.json` so `/codex-lb` appears in the command palette:
 
-No manual package installation is required. OpenCode installs GitHub plugin specs at startup.
+```jsonc
+{
+  "plugin": [
+    "opencode-codex-lb-switcher@git+https://github.com/YanzuoLu/opencode-codex-lb-switcher.git"
+  ]
+}
+```
+
+Alternatively, run `opencode plugin opencode-codex-lb-switcher@git+https://github.com/YanzuoLu/opencode-codex-lb-switcher.git --global` once to let OpenCode add the TUI entry, then keep `baseURL` and `apiKey` in `opencode.json`.
+
+Restart OpenCode after changing config files; plugins are loaded at startup.
+
+No npm install step is required. OpenCode installs GitHub plugin specs at startup.
 
 ## Command
 
@@ -40,9 +52,9 @@ It toggles the current workspace mode without adding prompt parts or conversatio
 
 If the current session is idle, the mode is written immediately. If the current session is busy, the switch is queued until that session emits `session.idle`. The plugin does not support a force switch and does not dispose an in-flight model response.
 
-## TUI Indicator
+## TUI Registration
 
-The package registers `/codex-lb` from its TUI hook and renders a small `codex-lb` prompt-right hint while codex-lb mode is active. Restart OpenCode after adding or updating the plugin entry so the updated plugin code is loaded.
+The package registers `/codex-lb` from its TUI hook. It does not currently render a prompt-right hint; mode is persisted in `~/.local/share/opencode-codex-lb-switcher/` and surfaced through the toggle toast.
 
 ## Behavior
 

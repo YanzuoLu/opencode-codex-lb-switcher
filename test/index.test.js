@@ -53,7 +53,7 @@ function makeTuiApi(directory, statusBySession = new Map([["ses", { type: "idle"
     events,
     toasts,
     renders,
-    slots,
+    slotRegistrations: slots,
     disposers,
     state: {
       path: { directory, worktree: directory },
@@ -687,6 +687,22 @@ test("registerCodexLbCommand queues while current session is busy until matching
     assert.equal(await readMode(dir, stateRoot), "codex-lb")
     assert.equal(api.toasts.at(-1).variant, "success")
   } finally {
+    await rm(dir, { recursive: true, force: true })
+    await rm(stateRoot, { recursive: true, force: true })
+  }
+})
+
+test("tui does not register prompt-right slots with bare string children", async () => {
+  const dir = await tempDir()
+  const stateRoot = await tempDir()
+  let api
+  try {
+    api = makeTuiApi(dir)
+    await tuiPlugin.tui(api, undefined, { stateRoot })
+
+    assert.equal(api.slotRegistrations.length, 0)
+  } finally {
+    for (const dispose of api?.disposers ?? []) dispose()
     await rm(dir, { recursive: true, force: true })
     await rm(stateRoot, { recursive: true, force: true })
   }
