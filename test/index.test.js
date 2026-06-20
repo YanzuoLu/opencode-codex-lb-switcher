@@ -201,6 +201,22 @@ test("createCodexLbFetch preserves Request method, body, signal, and query", asy
   assert.equal(calls[0].signal.aborted, true)
 })
 
+test("createCodexLbFetch leaves non-target URLs untouched", async () => {
+  const originalInput = "https://example.com/v1/responses"
+  const originalInit = { method: "POST", headers: { authorization: "Bearer original" }, body: "{}" }
+  const calls = []
+  const upstream = async (input, init) => {
+    calls.push({ input, init })
+    return new Response("{}", { status: 200 })
+  }
+  const wrapped = createCodexLbFetch(makeRouteOptions(), upstream)
+
+  await wrapped(originalInput, originalInit)
+
+  assert.equal(calls[0].input, originalInput)
+  assert.equal(calls[0].init, originalInit)
+})
+
 test("shouldRewriteURL only matches OpenAI and ChatGPT codex APIs", () => {
   assert.equal(shouldRewriteURL("https://api.openai.com/v1/responses"), true)
   assert.equal(shouldRewriteURL("https://api.openai.com/v1/models?limit=1"), true)

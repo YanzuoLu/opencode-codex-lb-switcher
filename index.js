@@ -114,7 +114,9 @@ function rewriteFetchArgs(input, init, options) {
 }
 
 export function createCodexLbFetch(options, upstream = fetch) {
-  return async (input, init = {}) => {
+  return async (input, init) => {
+    if (!shouldRewriteURL(input)) return callFetch(upstream, input, init)
+
     const [nextInput, nextInit] = rewriteFetchArgs(input, init, options)
     return callFetch(upstream, nextInput, nextInit)
   }
