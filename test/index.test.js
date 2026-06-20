@@ -4,24 +4,29 @@ import { mkdtemp, rm } from "node:fs/promises"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
 
-import {
+import plugin, {
   COMMAND,
-  applyCodexLbConfig,
+  applyOpenAIRouterConfig,
   createCodexLbFetch,
-  injectCommand,
+  createModeRoutingFetch,
+  installGlobalFetchRouter,
   normalizeOptions,
-  parseCommand,
   readMode,
   server,
+  shouldRewriteURL,
   stateFileFor,
-  switchMode,
   toggleMode,
+  rewriteCodexLbURL,
   writeMode,
 } from "../index.js"
-import { indicatorText } from "../tui.js"
+import { indicatorText, registerCodexLbCommand } from "../tui.js"
 
 async function tempDir() {
   return mkdtemp(join(tmpdir(), "oc-clb-"))
+}
+
+function makeRouteOptions() {
+  return { baseURL: "http://127.0.0.1:2455/v1", apiKey: "sk-clb" }
 }
 
 function makeClient() {
@@ -32,6 +37,66 @@ function makeClient() {
       async dispose(input) {
         calls.push(input ?? null)
         return true
+      },
+    },
+  }
+}
+
+function makeTuiApi(directory, statusBySession = new Map([["ses", { type: "idle" }]])) {
+  const commands = []
+  const events = new Map()
+  const toasts = []
+  const renders = []
+  const slots = []
+  const disposers = []
+  return {
+    commands,
+    events,
+    toasts,
+    renders,
+    slots,
+    disposers,
+    state: {
+      path: { directory, worktree: directory },
+      session: {
+        status(sessionID) {
+          return statusBySession.get(sessionID)
+        },
+      },
+    },
+    route: { current: { name: "session", params: { sessionID: "ses" } } },
+    command: {
+      register(callback) {
+        commands.push(callback)
+        return () => {}
+      },
+    },
+    event: {
+      on(type, handler) {
+        events.set(type, handler)
+        return () => {}
+      },
+    },
+    ui: {
+      toast(input) {
+        toasts.push(input)
+      },
+    },
+    renderer: {
+      requestRender() {
+        renders.push(true)
+      },
+    },
+    lifecycle: {
+      onDispose(fn) {
+        disposers.push(fn)
+        return () => {}
+      },
+    },
+    slots: {
+      register(registration) {
+        slots.push(registration)
+        return "slot"
       },
     },
   }
@@ -66,21 +131,9 @@ test("toggleMode flips between openai and codex-lb", () => {
   assert.equal(toggleMode("codex-lb"), "openai")
 })
 
-test("injectCommand only adds /codex-lb", () => {
-  const cfg = { command: { existing: { template: "Keep", description: "Keep" } } }
-  injectCommand(cfg)
-  assert.deepEqual(Object.keys(cfg.command).sort(), [COMMAND, "existing"].sort())
-  assert.equal(cfg.command[COMMAND].description, "Toggle codex-lb mode for this workspace")
-  assert.equal(cfg.command[COMMAND].template, "Toggle codex-lb mode for this workspace.")
-  assert.equal("prompt" in cfg.command[COMMAND], false)
-})
-
-test("parseCommand toggles current mode and rejects arguments", () => {
-  assert.deepEqual(parseCommand("codex-lb", "", "openai"), { from: "openai", to: "codex-lb" })
-  assert.deepEqual(parseCommand("codex-lb", "--force", "codex-lb"), { error: "usage" })
-  assert.equal(parseCommand("codex-lb-status", "", "openai"), undefined)
-  assert.equal(parseCommand("codex-lb-on", "", "openai"), undefined)
-  assert.equal(parseCommand("codex-lb-off", "", "openai"), undefined)
+test("root plugin entry exposes both server and tui hooks", () => {
+  assert.equal(plugin.server, server)
+  assert.equal(typeof plugin.tui, "function")
 })
 
 test("createCodexLbFetch rewrites v1 URLs and injects bearer auth", async () => {
@@ -90,7 +143,7 @@ test("createCodexLbFetch rewrites v1 URLs and injects bearer auth", async () => 
     calls.push({ url: request.url, auth: request.headers.get("authorization") })
     return new Response("{}", { status: 200 })
   }
-  const wrapped = createCodexLbFetch({ baseURL: "http://127.0.0.1:2455/v1", apiKey: "sk-clb" }, upstream)
+  const wrapped = createCodexLbFetch(makeRouteOptions(), upstream)
 
   await wrapped("https://api.openai.com/v1/responses", { method: "POST" })
   await wrapped("https://api.openai.com/v1/models")
@@ -116,7 +169,7 @@ test("createCodexLbFetch preserves Request method, body, signal, and query", asy
     })
     return new Response("{}", { status: 200 })
   }
-  const wrapped = createCodexLbFetch({ baseURL: "http://127.0.0.1:2455/v1", apiKey: "sk-clb" }, upstream)
+  const wrapped = createCodexLbFetch(makeRouteOptions(), upstream)
   const request = new Request("https://api.openai.com/v1/responses?stream=true", {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -136,165 +189,374 @@ test("createCodexLbFetch preserves Request method, body, signal, and query", asy
   assert.equal(calls[0].signal.aborted, true)
 })
 
-test("applyCodexLbConfig mutates only runtime openai options", () => {
-  const cfg = {}
-  applyCodexLbConfig(cfg, { baseURL: "http://127.0.0.1:2455/v1", apiKey: "sk-clb" })
-  assert.equal(cfg.provider.openai.options.baseURL, "http://127.0.0.1:2455/v1")
-  assert.equal(cfg.provider.openai.options.apiKey, "sk-clb")
-  assert.equal(typeof cfg.provider.openai.options.fetch, "function")
+test("shouldRewriteURL only matches OpenAI and ChatGPT codex APIs", () => {
+  assert.equal(shouldRewriteURL("https://api.openai.com/v1/responses"), true)
+  assert.equal(shouldRewriteURL("https://api.openai.com/v1/models?limit=1"), true)
+  assert.equal(shouldRewriteURL("https://chatgpt.com/backend-api/codex/responses"), true)
+  assert.equal(shouldRewriteURL("http://api.openai.com/v1/responses"), false)
+  assert.equal(shouldRewriteURL("/v1/responses"), false)
+  assert.equal(shouldRewriteURL("https://example.com/v1/responses"), false)
+  assert.equal(shouldRewriteURL("https://api.githubcopilot.com/chat/completions"), false)
 })
 
-test("plugin does not mutate provider config in openai mode", async () => {
+test("rewriteCodexLbURL maps OpenAI and ChatGPT paths to codex-lb baseURL", () => {
+  assert.equal(
+    rewriteCodexLbURL("https://api.openai.com/v1/responses?stream=true", "http://127.0.0.1:2455/v1").toString(),
+    "http://127.0.0.1:2455/v1/responses?stream=true",
+  )
+  assert.equal(
+    rewriteCodexLbURL("https://chatgpt.com/backend-api/codex/responses", "http://127.0.0.1:2455/v1").toString(),
+    "http://127.0.0.1:2455/v1/responses",
+  )
+})
+
+test("createModeRoutingFetch leaves native OpenAI mode byte-for-byte passthrough", async () => {
   const dir = await tempDir()
   const stateRoot = await tempDir()
   try {
-    const hooks = await server({ client: makeClient(), directory: dir }, { baseURL: "http://127.0.0.1:2455/v1", apiKey: "sk" }, { stateRoot })
-    const cfg = {}
-    await hooks.config(cfg)
-    assert.deepEqual(cfg.provider, undefined)
-    assert.equal(Object.keys(cfg.command).includes(COMMAND), true)
+    const originalInput = "https://api.openai.com/v1/responses"
+    const originalInit = { method: "POST", headers: { authorization: "Bearer openai" }, body: "{}" }
+    const calls = []
+    const upstream = async (input, init) => {
+      calls.push({ input, init })
+      return new Response("{}", { status: 200 })
+    }
+    const routed = createModeRoutingFetch({ directory: dir, stateRoot, options: makeRouteOptions(), upstream })
+
+    await routed(originalInput, originalInit)
+
+    assert.equal(calls[0].input, originalInput)
+    assert.equal(calls[0].init, originalInit)
   } finally {
     await rm(dir, { recursive: true, force: true })
     await rm(stateRoot, { recursive: true, force: true })
   }
 })
 
-test("plugin mutates provider config in codex-lb mode", async () => {
+test("createModeRoutingFetch routes OpenAI API requests through codex-lb in codex-lb mode", async () => {
+  const dir = await tempDir()
+  const stateRoot = await tempDir()
+  const calls = []
+  const upstream = async (input, init) => {
+    const request = new Request(input, init)
+    calls.push({
+      url: request.url,
+      method: request.method,
+      auth: request.headers.get("authorization"),
+      xTest: request.headers.get("x-test"),
+      body: await request.text(),
+    })
+    return new Response("{}", { status: 200 })
+  }
+  try {
+    await writeMode(dir, "codex-lb", stateRoot)
+    const routed = createModeRoutingFetch({ directory: dir, stateRoot, options: makeRouteOptions(), upstream })
+
+    await routed("https://api.openai.com/v1/responses?stream=true", {
+      method: "POST",
+      headers: { authorization: "Bearer openai", "x-test": "1" },
+      body: "{}",
+    })
+
+    assert.deepEqual(calls, [
+      {
+        url: "http://127.0.0.1:2455/v1/responses?stream=true",
+        method: "POST",
+        auth: "Bearer sk-clb",
+        xTest: "1",
+        body: "{}",
+      },
+    ])
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+    await rm(stateRoot, { recursive: true, force: true })
+  }
+})
+
+test("createModeRoutingFetch routes opencode-websearch ChatGPT Responses through codex-lb", async () => {
+  const dir = await tempDir()
+  const stateRoot = await tempDir()
+  const calls = []
+  const upstream = async (input, init) => {
+    const request = new Request(input, init)
+    calls.push({ url: request.url, auth: request.headers.get("authorization"), userAgent: request.headers.get("user-agent") })
+    return new Response("{}", { status: 200 })
+  }
+  try {
+    await writeMode(dir, "codex-lb", stateRoot)
+    const routed = createModeRoutingFetch({ directory: dir, stateRoot, options: makeRouteOptions(), upstream })
+
+    await routed("https://chatgpt.com/backend-api/codex/responses", {
+      method: "POST",
+      headers: { authorization: "Bearer chatgpt", "user-agent": "opencode-websearch" },
+      body: "{}",
+    })
+
+    assert.deepEqual(calls, [
+      {
+        url: "http://127.0.0.1:2455/v1/responses",
+        auth: "Bearer sk-clb",
+        userAgent: "opencode-websearch",
+      },
+    ])
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+    await rm(stateRoot, { recursive: true, force: true })
+  }
+})
+
+test("createModeRoutingFetch leaves non-OpenAI requests untouched in codex-lb mode", async () => {
   const dir = await tempDir()
   const stateRoot = await tempDir()
   try {
     await writeMode(dir, "codex-lb", stateRoot)
-    const hooks = await server({ client: makeClient(), directory: dir }, { baseURL: "http://127.0.0.1:2455/v1", apiKey: "sk" }, { stateRoot })
-    const cfg = {}
+    const originalInput = "https://api.githubcopilot.com/chat/completions"
+    const originalInit = { method: "POST", headers: { authorization: "Bearer copilot" }, body: "{}" }
+    const calls = []
+    const upstream = async (input, init) => {
+      calls.push({ input, init })
+      return new Response("{}", { status: 200 })
+    }
+    const routed = createModeRoutingFetch({ directory: dir, stateRoot, options: makeRouteOptions(), upstream })
+
+    await routed(originalInput, originalInit)
+
+    assert.equal(calls[0].input, originalInput)
+    assert.equal(calls[0].init, originalInit)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+    await rm(stateRoot, { recursive: true, force: true })
+  }
+})
+
+test("createModeRoutingFetch leaves relative URLs untouched in codex-lb mode", async () => {
+  const dir = await tempDir()
+  const stateRoot = await tempDir()
+  try {
+    await writeMode(dir, "codex-lb", stateRoot)
+    const originalInput = "/relative/path"
+    const originalInit = { method: "GET" }
+    const calls = []
+    const upstream = async (input, init) => {
+      calls.push({ input, init })
+      return new Response("{}", { status: 200 })
+    }
+    const routed = createModeRoutingFetch({ directory: dir, stateRoot, options: makeRouteOptions(), upstream })
+
+    await routed(originalInput, originalInit)
+
+    assert.equal(calls[0].input, originalInput)
+    assert.equal(calls[0].init, originalInit)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+    await rm(stateRoot, { recursive: true, force: true })
+  }
+})
+
+test("installGlobalFetchRouter wraps and restores global fetch safely", async () => {
+  const dir = await tempDir()
+  const stateRoot = await tempDir()
+  const fetchGlobal = { fetch: async () => new Response("{}", { status: 200 }) }
+  const originalFetch = fetchGlobal.fetch
+  try {
+    const dispose = installGlobalFetchRouter({ directory: dir, stateRoot, options: makeRouteOptions(), fetchGlobal })
+    assert.notEqual(fetchGlobal.fetch, originalFetch)
+    await dispose()
+    assert.equal(fetchGlobal.fetch, originalFetch)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+    await rm(stateRoot, { recursive: true, force: true })
+  }
+})
+
+test("installGlobalFetchRouter restores original fetch after out-of-order disposals", async () => {
+  const dirA = await tempDir()
+  const dirB = await tempDir()
+  const stateRoot = await tempDir()
+  const fetchGlobal = { fetch: async () => new Response("{}", { status: 200 }) }
+  const originalFetch = fetchGlobal.fetch
+  try {
+    const disposeA = installGlobalFetchRouter({ directory: dirA, stateRoot, options: makeRouteOptions(), fetchGlobal })
+    const disposeB = installGlobalFetchRouter({ directory: dirB, stateRoot, options: makeRouteOptions(), fetchGlobal })
+
+    await disposeA()
+    assert.notEqual(fetchGlobal.fetch, originalFetch)
+
+    await disposeB()
+    assert.equal(fetchGlobal.fetch, originalFetch)
+  } finally {
+    await rm(dirA, { recursive: true, force: true })
+    await rm(dirB, { recursive: true, force: true })
+    await rm(stateRoot, { recursive: true, force: true })
+  }
+})
+
+test("installGlobalFetchRouter disables routing captured by later external wrappers", async () => {
+  const dir = await tempDir()
+  const stateRoot = await tempDir()
+  const calls = []
+  const fetchGlobal = {
+    fetch: async (input, init) => {
+      calls.push({ input, init })
+      return new Response("{}", { status: 200 })
+    },
+  }
+  try {
+    await writeMode(dir, "codex-lb", stateRoot)
+    const dispose = installGlobalFetchRouter({ directory: dir, stateRoot, options: makeRouteOptions(), fetchGlobal })
+    const pluginFetch = fetchGlobal.fetch
+    fetchGlobal.fetch = async (input, init) => pluginFetch(input, init)
+
+    await dispose()
+    await fetchGlobal.fetch("https://api.openai.com/v1/responses", { headers: { authorization: "Bearer openai" } })
+
+    assert.equal(calls[0].input, "https://api.openai.com/v1/responses")
+    assert.deepEqual(calls[0].init, { headers: { authorization: "Bearer openai" } })
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+    await rm(stateRoot, { recursive: true, force: true })
+  }
+})
+
+test("installGlobalFetchRouter does not overwrite a later external wrapper on another install", async () => {
+  const dirA = await tempDir()
+  const dirB = await tempDir()
+  const stateRoot = await tempDir()
+  const fetchGlobal = { fetch: async () => new Response("{}", { status: 200 }) }
+  try {
+    const disposeA = installGlobalFetchRouter({ directory: dirA, stateRoot, options: makeRouteOptions(), fetchGlobal })
+    const pluginFetch = fetchGlobal.fetch
+    const externalFetch = async (input, init) => pluginFetch(input, init)
+    fetchGlobal.fetch = externalFetch
+
+    const disposeB = installGlobalFetchRouter({ directory: dirB, stateRoot, options: makeRouteOptions(), fetchGlobal })
+
+    assert.equal(fetchGlobal.fetch, externalFetch)
+    await disposeB()
+    await disposeA()
+  } finally {
+    await rm(dirA, { recursive: true, force: true })
+    await rm(dirB, { recursive: true, force: true })
+    await rm(stateRoot, { recursive: true, force: true })
+  }
+})
+
+test("applyOpenAIRouterConfig preserves websearch model options and only sets fetch", () => {
+  const cfg = {
+    provider: {
+      openai: {
+        models: {
+          "gpt-5.5": { options: { websearch: "auto" } },
+        },
+        options: {
+          apiKey: "sk-openai",
+          baseURL: "https://api.openai.com/v1",
+        },
+      },
+    },
+  }
+  applyOpenAIRouterConfig(cfg, { directory: "/tmp/project", options: makeRouteOptions(), upstream: async () => new Response("{}") })
+
+  assert.equal(cfg.provider.openai.models["gpt-5.5"].options.websearch, "auto")
+  assert.equal(cfg.provider.openai.options.apiKey, "sk-openai")
+  assert.equal(cfg.provider.openai.options.baseURL, "https://api.openai.com/v1")
+  assert.equal(typeof cfg.provider.openai.options.fetch, "function")
+})
+
+test("server config installs fetch router but does not inject prompt command or codex-lb credentials", async () => {
+  const dir = await tempDir()
+  const stateRoot = await tempDir()
+  const fetchGlobal = { fetch: async () => new Response("{}", { status: 200 }) }
+  try {
+    const hooks = await server({ client: makeClient(), directory: dir }, makeRouteOptions(), { stateRoot, fetchGlobal })
+    const cfg = { provider: { openai: { models: { "gpt-5.5": { options: { websearch: "auto" } } } } } }
     await hooks.config(cfg)
-    assert.equal(cfg.provider.openai.options.baseURL, "http://127.0.0.1:2455/v1")
+
+    assert.equal(cfg.command, undefined)
+    assert.equal(cfg.provider.openai.options.baseURL, undefined)
+    assert.equal(cfg.provider.openai.options.apiKey, undefined)
+    assert.equal(typeof cfg.provider.openai.options.fetch, "function")
+    assert.equal(typeof hooks["command.execute.before"], "undefined")
   } finally {
     await rm(dir, { recursive: true, force: true })
     await rm(stateRoot, { recursive: true, force: true })
   }
 })
 
-test("/codex-lb queues switch until the matching session is idle", async () => {
+test("server dispose restores global fetch without disposing OpenCode instance", async () => {
   const dir = await tempDir()
   const stateRoot = await tempDir()
   const client = makeClient()
+  const fetchGlobal = { fetch: async () => new Response("{}", { status: 200 }) }
+  const originalFetch = fetchGlobal.fetch
   try {
-    const hooks = await server({ client, directory: dir }, { baseURL: "http://127.0.0.1:2455/v1", apiKey: "sk" }, { stateRoot })
-    const output = { parts: [] }
+    const hooks = await server({ client, directory: dir }, makeRouteOptions(), { stateRoot, fetchGlobal })
+    assert.notEqual(fetchGlobal.fetch, originalFetch)
 
-    await hooks["command.execute.before"]({ command: "codex-lb", arguments: "", sessionID: "ses" }, output)
-    assert.equal(client.calls.length, 0)
-    assert.match(output.parts[0].text, /queued/)
+    await hooks.dispose()
 
-    await hooks.event({ event: { type: "session.idle", properties: { sessionID: "other" } } })
+    assert.equal(fetchGlobal.fetch, originalFetch)
     assert.equal(client.calls.length, 0)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+    await rm(stateRoot, { recursive: true, force: true })
+  }
+})
+
+test("registerCodexLbCommand registers action-only slash command", async () => {
+  const dir = await tempDir()
+  const stateRoot = await tempDir()
+  try {
+    const api = makeTuiApi(dir)
+    await registerCodexLbCommand(api, { directory: dir, stateRoot })
+
+    const command = api.commands[0]()[0]
+    assert.equal(command.slash.name, COMMAND)
+    assert.equal(typeof command.onSelect, "function")
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+    await rm(stateRoot, { recursive: true, force: true })
+  }
+})
+
+test("registerCodexLbCommand toggles immediately when current session is idle", async () => {
+  const dir = await tempDir()
+  const stateRoot = await tempDir()
+  try {
+    const api = makeTuiApi(dir, new Map([["ses", { type: "idle" }]]))
+    await registerCodexLbCommand(api, { directory: dir, stateRoot })
+    const command = api.commands[0]()[0]
+
+    await command.onSelect()
+
+    assert.equal(await readMode(dir, stateRoot), "codex-lb")
+    assert.equal(api.toasts[0].variant, "success")
+    assert.equal(api.renders.length, 1)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+    await rm(stateRoot, { recursive: true, force: true })
+  }
+})
+
+test("registerCodexLbCommand queues while current session is busy until matching idle", async () => {
+  const dir = await tempDir()
+  const stateRoot = await tempDir()
+  const statuses = new Map([["ses", { type: "busy" }]])
+  try {
+    const api = makeTuiApi(dir, statuses)
+    await registerCodexLbCommand(api, { directory: dir, stateRoot })
+    const command = api.commands[0]()[0]
+
+    await command.onSelect()
+    assert.equal(await readMode(dir, stateRoot), "openai")
+    assert.equal(api.toasts[0].variant, "info")
+
+    await api.events.get("session.idle")({ properties: { sessionID: "other" } })
     assert.equal(await readMode(dir, stateRoot), "openai")
 
-    await hooks.event({ event: { type: "session.idle", properties: { sessionID: "ses" } } })
-    assert.equal(client.calls.length, 1)
+    await api.events.get("session.idle")({ properties: { sessionID: "ses" } })
     assert.equal(await readMode(dir, stateRoot), "codex-lb")
-  } finally {
-    await rm(dir, { recursive: true, force: true })
-    await rm(stateRoot, { recursive: true, force: true })
-  }
-})
-
-test("/codex-lb mutates the existing output parts array", async () => {
-  const dir = await tempDir()
-  const stateRoot = await tempDir()
-  try {
-    const hooks = await server({ client: makeClient(), directory: dir }, { baseURL: "http://127.0.0.1:2455/v1", apiKey: "sk" }, { stateRoot })
-    const parts = []
-    const output = { parts }
-
-    await hooks["command.execute.before"]({ command: "codex-lb", arguments: "", sessionID: "ses" }, output)
-
-    assert.equal(output.parts, parts)
-    assert.equal(parts.length, 1)
-    assert.match(parts[0].text, /queued/)
-  } finally {
-    await rm(dir, { recursive: true, force: true })
-    await rm(stateRoot, { recursive: true, force: true })
-  }
-})
-
-test("/codex-lb waits for all queued sessions to become idle", async () => {
-  const dir = await tempDir()
-  const stateRoot = await tempDir()
-  const client = makeClient()
-  try {
-    const hooks = await server({ client, directory: dir }, { baseURL: "http://127.0.0.1:2455/v1", apiKey: "sk" }, { stateRoot })
-
-    await hooks["command.execute.before"]({ command: "codex-lb", arguments: "", sessionID: "a" }, { parts: [] })
-    await hooks["command.execute.before"]({ command: "codex-lb", arguments: "", sessionID: "b" }, { parts: [] })
-
-    await hooks.event({ event: { type: "session.idle", properties: { sessionID: "a" } } })
-    assert.equal(client.calls.length, 0)
-    assert.equal(await readMode(dir, stateRoot), "openai")
-
-    await hooks.event({ event: { type: "session.idle", properties: { sessionID: "b" } } })
-    assert.equal(client.calls.length, 1)
-    assert.equal(await readMode(dir, stateRoot), "codex-lb")
-  } finally {
-    await rm(dir, { recursive: true, force: true })
-    await rm(stateRoot, { recursive: true, force: true })
-  }
-})
-
-test("/codex-lb does not switch if a queued session becomes busy again", async () => {
-  const dir = await tempDir()
-  const stateRoot = await tempDir()
-  const client = makeClient()
-  try {
-    const hooks = await server({ client, directory: dir }, { baseURL: "http://127.0.0.1:2455/v1", apiKey: "sk" }, { stateRoot })
-
-    await hooks["command.execute.before"]({ command: "codex-lb", arguments: "", sessionID: "a" }, { parts: [] })
-    await hooks["command.execute.before"]({ command: "codex-lb", arguments: "", sessionID: "b" }, { parts: [] })
-
-    await hooks.event({ event: { type: "session.idle", properties: { sessionID: "a" } } })
-    await hooks.event({ event: { type: "session.status", properties: { sessionID: "a", status: { type: "busy" } } } })
-    await hooks.event({ event: { type: "session.idle", properties: { sessionID: "b" } } })
-
-    assert.equal(client.calls.length, 0)
-    assert.equal(await readMode(dir, stateRoot), "openai")
-
-    await hooks.event({ event: { type: "session.idle", properties: { sessionID: "a" } } })
-    assert.equal(client.calls.length, 1)
-    assert.equal(await readMode(dir, stateRoot), "codex-lb")
-  } finally {
-    await rm(dir, { recursive: true, force: true })
-    await rm(stateRoot, { recursive: true, force: true })
-  }
-})
-
-test("/codex-lb rejects arguments and does not switch", async () => {
-  const dir = await tempDir()
-  const stateRoot = await tempDir()
-  const client = makeClient()
-  try {
-    const hooks = await server({ client, directory: dir }, { baseURL: "http://127.0.0.1:2455/v1", apiKey: "sk" }, { stateRoot })
-    const output = { parts: [] }
-    await hooks["command.execute.before"]({ command: "codex-lb", arguments: "--force", sessionID: "ses" }, output)
-    assert.equal(client.calls.length, 0)
-    assert.match(output.parts[0].text, /usage: \/codex-lb/)
-
-    await hooks.event({ event: { type: "session.idle", properties: { sessionID: "ses" } } })
-    assert.equal(client.calls.length, 0)
-    assert.equal(await readMode(dir, stateRoot), "openai")
-  } finally {
-    await rm(dir, { recursive: true, force: true })
-    await rm(stateRoot, { recursive: true, force: true })
-  }
-})
-
-test("switchMode writes the next mode and disposes the instance", async () => {
-  const dir = await tempDir()
-  const stateRoot = await tempDir()
-  const client = makeClient()
-  try {
-    await switchMode({ client, directory: dir, mode: "codex-lb", stateRoot })
-    assert.equal(client.calls.length, 1)
-    assert.equal(await readMode(dir, stateRoot), "codex-lb")
+    assert.equal(api.toasts.at(-1).variant, "success")
   } finally {
     await rm(dir, { recursive: true, force: true })
     await rm(stateRoot, { recursive: true, force: true })

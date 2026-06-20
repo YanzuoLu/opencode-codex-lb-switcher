@@ -1,7 +1,7 @@
 {
   "name": "opencode-codex-lb-switcher",
   "version": "0.1.0",
-  "description": "Toggle OpenCode between native OpenAI and codex-lb with automatic reload.",
+  "description": "Toggle OpenCode OpenAI traffic between native OpenAI and codex-lb.",
   "type": "module",
   "main": "./index.js",
   "exports": {
