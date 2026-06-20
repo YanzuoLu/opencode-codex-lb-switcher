@@ -34,9 +34,30 @@ async function applyMode(api, directory, mode, stateRoot) {
   requestRender(api)
 }
 
-export async function registerCodexLbCommand(api, { directory, stateRoot }) {
-  if (typeof api.command?.register !== "function") return () => {}
+async function toggleCodexLbMode(api, directory, stateRoot, pendingBySession) {
+  const mode = await readMode(directory, stateRoot)
+  const nextMode = toggleMode(mode)
+  const sessionID = currentSessionID(api)
+  if (isSessionBusy(api, sessionID)) {
+    pendingBySession.set(sessionID, nextMode)
+    showToast(api, "info", "codex-lb", "Switch queued until this session is idle")
+    return
+  }
+  await applyMode(api, directory, nextMode, stateRoot)
+}
 
+function commandFields() {
+  return {
+    title: "Toggle codex-lb",
+    value: COMMAND,
+    description: "Toggle codex-lb mode",
+    slash: {
+      name: COMMAND,
+    },
+  }
+}
+
+export async function registerCodexLbCommand(api, { directory, stateRoot }) {
   const pendingBySession = new Map()
   const unregisterIdle = api.event?.on?.("session.idle", async (event = {}) => {
     const sessionID = event.properties?.sessionID ?? event.sessionID
@@ -46,27 +67,34 @@ export async function registerCodexLbCommand(api, { directory, stateRoot }) {
     await applyMode(api, directory, nextMode, stateRoot)
   })
 
-  const unregisterCommand = api.command.register(() => [
-    {
-      title: "Toggle codex-lb",
-      value: COMMAND,
-      description: "Toggle codex-lb mode",
-      slash: {
-        name: COMMAND,
+  let unregisterCommand
+  if (typeof api.keymap?.registerLayer === "function") {
+    unregisterCommand = api.keymap.registerLayer({
+      priority: 900,
+      commands: [
+        {
+          name: COMMAND,
+          ...commandFields(),
+          async run() {
+            await toggleCodexLbMode(api, directory, stateRoot, pendingBySession)
+            return true
+          },
+        },
+      ],
+    })
+  } else if (typeof api.command?.register === "function") {
+    unregisterCommand = api.command.register(() => [
+      {
+        ...commandFields(),
+        async onSelect() {
+          await toggleCodexLbMode(api, directory, stateRoot, pendingBySession)
+        },
       },
-      async onSelect() {
-        const mode = await readMode(directory, stateRoot)
-        const nextMode = toggleMode(mode)
-        const sessionID = currentSessionID(api)
-        if (isSessionBusy(api, sessionID)) {
-          pendingBySession.set(sessionID, nextMode)
-          showToast(api, "info", "codex-lb", "Switch queued until this session is idle")
-          return
-        }
-        await applyMode(api, directory, nextMode, stateRoot)
-      },
-    },
-  ])
+    ])
+  } else {
+    unregisterIdle?.()
+    return () => {}
+  }
 
   api.lifecycle?.onDispose?.(() => {
     unregisterCommand?.()

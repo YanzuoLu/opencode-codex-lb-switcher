@@ -101,6 +101,20 @@ function makeTuiApi(directory, statusBySession = new Map([["ses", { type: "idle"
   }
 }
 
+function makeKeymapTuiApi(directory, statusBySession = new Map([["ses", { type: "idle" }]])) {
+  const api = makeTuiApi(directory, statusBySession)
+  const layers = []
+  delete api.command
+  api.keymap = {
+    registerLayer(layer) {
+      layers.push(layer)
+      return () => {}
+    },
+  }
+  api.layers = layers
+  return api
+}
+
 function assertOpenCodeV1PluginShape(value, kind) {
   if (!value || typeof value !== "object") throw new TypeError(`Plugin must default export an object with ${kind}()`)
   if (value.server !== undefined && typeof value.server !== "function") throw new TypeError("invalid server export")
@@ -574,6 +588,53 @@ test("registerCodexLbCommand registers action-only slash command", async () => {
     assert.equal(command.slash.name, COMMAND)
     assert.equal(command.slash.description, undefined)
     assert.equal(typeof command.onSelect, "function")
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+    await rm(stateRoot, { recursive: true, force: true })
+  }
+})
+
+test("registerCodexLbCommand registers keymap command when legacy command API is absent", async () => {
+  const dir = await tempDir()
+  const stateRoot = await tempDir()
+  try {
+    const api = makeKeymapTuiApi(dir)
+    await registerCodexLbCommand(api, { directory: dir, stateRoot })
+
+    const command = api.layers[0].commands[0]
+    assert.equal(command.name, COMMAND)
+    assert.equal(command.title, "Toggle codex-lb")
+    assert.equal(command.value, COMMAND)
+    assert.equal(command.description, "Toggle codex-lb mode")
+    assert.equal(command.slash.name, COMMAND)
+    assert.equal(typeof command.run, "function")
+
+    await command.run()
+
+    assert.equal(await readMode(dir, stateRoot), "codex-lb")
+    assert.equal(api.toasts[0].variant, "success")
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+    await rm(stateRoot, { recursive: true, force: true })
+  }
+})
+
+test("registerCodexLbCommand keymap command queues while current session is busy", async () => {
+  const dir = await tempDir()
+  const stateRoot = await tempDir()
+  const statuses = new Map([["ses", { type: "busy" }]])
+  try {
+    const api = makeKeymapTuiApi(dir, statuses)
+    await registerCodexLbCommand(api, { directory: dir, stateRoot })
+    const command = api.layers[0].commands[0]
+
+    await command.run()
+    assert.equal(await readMode(dir, stateRoot), "openai")
+    assert.equal(api.toasts[0].variant, "info")
+
+    await api.events.get("session.idle")({ properties: { sessionID: "ses" } })
+    assert.equal(await readMode(dir, stateRoot), "codex-lb")
+    assert.equal(api.toasts.at(-1).variant, "success")
   } finally {
     await rm(dir, { recursive: true, force: true })
     await rm(stateRoot, { recursive: true, force: true })
