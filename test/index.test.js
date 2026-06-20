@@ -945,6 +945,16 @@ test("sidebar status builds a real element shape for OpenAI sessions", async () 
   })
 })
 
+test("sidebar status reads direct TUI theme shape", async () => {
+  const { createSidebarStatusElement } = await import("../tui.js")
+  const api = makeTuiApi("/tmp/worktree")
+  api.theme = { text: "text", textMuted: "muted", success: "success" }
+
+  const rendered = createSidebarStatusElement(api, "codex-lb", makeOpenTuiView())
+
+  assert.equal(rendered.children[0].props.fg, "success")
+})
+
 test("sidebarStatusText labels native and codex-lb modes", async () => {
   const { sidebarStatusText } = await import("../tui.js")
 

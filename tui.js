@@ -86,7 +86,7 @@ function textNode(value, props = {}, view = defaultSolidView) {
 
 export function createSidebarStatusElement(api, mode, view = defaultSolidView) {
   if (!view) throw new Error(`${SERVICE}: TUI runtime is not initialized`)
-  const theme = api.theme?.current ?? {}
+  const theme = api.theme?.current ?? api.theme ?? {}
   const detailColor = mode === "codex-lb" ? theme.success : theme.textMuted
   return elementNode("box", { width: "100%", flexDirection: "column" }, [textNode(`Codex LB: ${sidebarStatusText(mode)}`, { fg: detailColor }, view)], view)
 }
