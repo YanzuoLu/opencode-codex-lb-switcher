@@ -400,6 +400,27 @@ test("createModeRoutingFetch keeps codex-lb fail-closed after state read failure
   }
 })
 
+test("createModeRoutingFetch fails closed on cold invalid state for target requests", async () => {
+  const dir = await tempDir()
+  const stateRoot = await tempDir()
+  const calls = []
+  const upstream = async (input) => {
+    calls.push(String(input))
+    return new Response("{}", { status: 200 })
+  }
+  try {
+    await writeFile(stateFileFor(dir, stateRoot), "{")
+    const routed = createModeRoutingFetch({ directory: dir, stateRoot, options: makeRouteOptions(), upstream })
+
+    await assert.rejects(() => routed("https://api.openai.com/v1/responses"), /mode state unavailable/)
+
+    assert.deepEqual(calls, [])
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+    await rm(stateRoot, { recursive: true, force: true })
+  }
+})
+
 test("createModeRoutingFetch propagates codex-lb failures without native retry", async () => {
   const dir = await tempDir()
   const stateRoot = await tempDir()
@@ -805,6 +826,27 @@ test("registerCodexLbCommand toggles immediately when current session is idle", 
   }
 })
 
+test("registerCodexLbCommand updates sidebar signal immediately", async () => {
+  const dir = await tempDir()
+  const stateRoot = await tempDir()
+  let api
+  try {
+    const { registerSidebarStatus } = await import("../tui.js")
+    const view = makeReactiveOpenTuiView()
+    api = makeTuiApi(dir, new Map([["ses", { type: "idle" }]]))
+    await registerSidebarStatus(api, { directory: dir, stateRoot, view })
+    await registerCodexLbCommand(api, { directory: dir, stateRoot })
+
+    await api.commands[0]()[0].onSelect()
+
+    assert.deepEqual(view.signals[0].calls, ["codex-lb"])
+  } finally {
+    for (const dispose of api?.disposers ?? []) dispose()
+    await rm(dir, { recursive: true, force: true })
+    await rm(stateRoot, { recursive: true, force: true })
+  }
+})
+
 test("registerCodexLbCommand queues while current session is busy until matching idle", async () => {
   const dir = await tempDir()
   const stateRoot = await tempDir()
@@ -958,11 +1000,11 @@ test("sidebar status detects OpenAI provider from config model", async () => {
   assert.equal(isOpenAISession(api, "ses"), true)
 })
 
-test("sidebar status stays visible when OpenCode has no provider signal", async () => {
+test("sidebar status hides when OpenCode has no provider signal", async () => {
   const { isOpenAISession } = await import("../tui.js")
   const api = makeTuiApi("/tmp/worktree", new Map([["ses", { type: "idle" }]]), new Map([["ses", { id: "ses" }]]))
 
-  assert.equal(isOpenAISession(api, "ses"), true)
+  assert.equal(isOpenAISession(api, "ses"), false)
 })
 
 test("sidebar status builds a real element shape for OpenAI sessions", async () => {

@@ -47,6 +47,15 @@ async function readModeStrict(directory, stateRoot = defaultStateRoot()) {
   throw new Error(`${SERVICE}: invalid mode state`)
 }
 
+async function readModeForRouting(directory, stateRoot = defaultStateRoot()) {
+  try {
+    return await readModeStrict(directory, stateRoot)
+  } catch (error) {
+    if (error?.code === "ENOENT") return "openai"
+    throw error
+  }
+}
+
 export async function readMode(directory, stateRoot = defaultStateRoot()) {
   try {
     return await readModeStrict(directory, stateRoot)
@@ -128,16 +137,18 @@ export function createCodexLbFetch(options, upstream = fetch) {
 }
 
 export function createModeRoutingFetch({ directory, stateRoot, options, upstream = fetch, modeState }) {
-  const memory = modeState ?? { lastMode: "openai" }
+  const memory = modeState ?? { lastMode: undefined }
   return async (input, init) => {
     let mode
     try {
-      mode = await readModeStrict(directory, stateRoot)
+      mode = await readModeForRouting(directory, stateRoot)
       memory.lastMode = mode
     } catch {
       mode = memory.lastMode
     }
 
+    if (!mode && shouldRewriteURL(input)) throw new Error(`${SERVICE}: mode state unavailable`)
+    if (!mode) return callFetch(upstream, input, init)
     if (mode !== "codex-lb") return callFetch(upstream, input, init)
     if (!shouldRewriteURL(input)) return callFetch(upstream, input, init)
 

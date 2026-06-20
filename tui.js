@@ -1,6 +1,26 @@
 import { COMMAND, readMode, toggleMode, writeMode } from "./index.js"
 
 const SERVICE = "opencode-codex-lb-switcher"
+const modeListeners = new Map()
+
+function modeKey(directory, stateRoot) {
+  return `${stateRoot ?? ""}\0${directory}`
+}
+
+function subscribeMode(directory, stateRoot, listener) {
+  const key = modeKey(directory, stateRoot)
+  const listeners = modeListeners.get(key) ?? new Set()
+  listeners.add(listener)
+  modeListeners.set(key, listeners)
+  return () => {
+    listeners.delete(listener)
+    if (listeners.size === 0) modeListeners.delete(key)
+  }
+}
+
+function notifyMode(directory, stateRoot, mode) {
+  for (const listener of modeListeners.get(modeKey(directory, stateRoot)) ?? []) listener(mode)
+}
 
 export function indicatorText(mode) {
   return mode === "codex-lb" ? "codex-lb" : ""
@@ -52,7 +72,7 @@ export function isOpenAISession(api, sessionID) {
   }
   const configProviderID = modelProviderID(api.state?.config?.model)
   if (configProviderID) return configProviderID === "openai"
-  return true
+  return false
 }
 
 export function sidebarSessionID(api, props = {}) {
@@ -103,6 +123,7 @@ export function createSidebarStatusElement(api, mode, view = defaultSolidView) {
 
 async function applyMode(api, directory, mode, stateRoot) {
   await writeMode(directory, mode, stateRoot)
+  notifyMode(directory, stateRoot, mode)
   showToast(api, "success", "codex-lb", mode === "codex-lb" ? "codex-lb mode enabled" : "native OpenAI mode enabled")
   requestRender(api)
 }
@@ -203,6 +224,12 @@ export async function registerSidebarStatus(api, { directory, stateRoot, view: r
   let disposed = false
   let inFlight = false
 
+  const unsubscribeMode = subscribeMode(directory, stateRoot, (nextMode) => {
+    if (nextMode === mode()) return
+    setMode(nextMode)
+    requestRender(api)
+  })
+
   async function refresh() {
     if (disposed || inFlight) return
     inFlight = true
@@ -231,6 +258,7 @@ export async function registerSidebarStatus(api, { directory, stateRoot, view: r
   const timer = setInterval(refresh, 1000)
   const dispose = () => {
     disposed = true
+    unsubscribeMode()
     clearInterval(timer)
   }
   api.lifecycle?.onDispose?.(dispose)

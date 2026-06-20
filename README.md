@@ -11,7 +11,7 @@ Add the server plugin entry with options to `opencode.json`:
   "$schema": "https://opencode.ai/config.json",
   "plugin": [
     [
-      "opencode-codex-lb-switcher@git+https://github.com/YanzuoLu/opencode-codex-lb-switcher.git",
+      "opencode-codex-lb-switcher@git+https://github.com/YanzuoLu/opencode-codex-lb-switcher.git#<full-commit-sha>",
       {
         "baseURL": "http://127.0.0.1:2455/v1",
         "apiKey": "{env:CODEX_LB_API_KEY}"
@@ -26,12 +26,14 @@ OpenCode 1.17.8 also needs the TUI target listed in `tui.json` so `/codex-lb` ap
 ```jsonc
 {
   "plugin": [
-    "opencode-codex-lb-switcher@git+https://github.com/YanzuoLu/opencode-codex-lb-switcher.git"
+    "opencode-codex-lb-switcher@git+https://github.com/YanzuoLu/opencode-codex-lb-switcher.git#<full-commit-sha>"
   ]
 }
 ```
 
-Alternatively, run `opencode plugin opencode-codex-lb-switcher@git+https://github.com/YanzuoLu/opencode-codex-lb-switcher.git --global` once to let OpenCode add the TUI entry, then keep `baseURL` and `apiKey` in `opencode.json`.
+Alternatively, run `opencode plugin opencode-codex-lb-switcher@git+https://github.com/YanzuoLu/opencode-codex-lb-switcher.git#<full-commit-sha> --global` once to let OpenCode add the TUI entry, then keep `baseURL` and `apiKey` in `opencode.json`.
+
+Use a full commit SHA for both files; do not leave this plugin on a floating branch spec.
 
 Restart OpenCode after changing config files; plugins are loaded at startup.
 
@@ -58,8 +60,8 @@ The package registers `/codex-lb` from its TUI hook. It does not render a prompt
 
 For sessions whose current model provider is `openai`, the TUI hook also renders a small sidebar status:
 
-- `Codex LB / native OpenAI` in native mode.
-- `Codex LB / routing via codex-lb` in codex-lb mode.
+- `Codex LB: native OpenAI` in native mode.
+- `Codex LB: routing via codex-lb` in codex-lb mode.
 
 The sidebar status is hidden for non-OpenAI providers.
 
@@ -76,7 +78,7 @@ In codex-lb mode it installs in-memory fetch routers that rewrite only OpenAI/Ch
 
 Non-OpenAI requests pass through unchanged. The plugin preserves existing provider/model options such as `provider.openai.models.*.options.websearch`, and codex-lb mode also routes supported `opencode-websearch` OpenAI/ChatGPT Responses requests through codex-lb.
 
-codex-lb mode is fail-closed for OpenAI/ChatGPT API traffic. If a request has been selected for codex-lb routing and codex-lb fails, the error is surfaced to OpenCode; the plugin does not retry the same request against native OpenAI/ChatGPT. If the router has already observed `codex-lb` mode and the workspace mode file becomes temporarily unreadable, it keeps routing target requests through codex-lb instead of silently falling back to native OpenAI.
+codex-lb mode is fail-closed for OpenAI/ChatGPT API traffic. If a request has been selected for codex-lb routing and codex-lb fails, the error is surfaced to OpenCode; the plugin does not retry the same request against native OpenAI/ChatGPT. If the router has already observed `codex-lb` mode and the workspace mode file becomes temporarily unreadable, it keeps routing target requests through codex-lb instead of silently falling back to native OpenAI. If the mode file exists but is unreadable or invalid before any trusted mode has been observed, target OpenAI/ChatGPT requests fail instead of falling back to native upstream. A missing mode file still defaults to native OpenAI mode.
 
 It does not set `provider.openai.options.fetch`, so OpenCode's built-in OpenAI/ChatGPT OAuth fetch path remains intact in native mode.
 
