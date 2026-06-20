@@ -54,7 +54,14 @@ If the current session is idle, the mode is written immediately. If the current 
 
 ## TUI Registration
 
-The package registers `/codex-lb` from its TUI hook. It does not currently render a prompt-right hint; mode is persisted in `~/.local/share/opencode-codex-lb-switcher/` and surfaced through the toggle toast.
+The package registers `/codex-lb` from its TUI hook. It does not render a prompt-right hint; that slot is intentionally avoided because bare text children can crash OpenTUI.
+
+For sessions whose current model provider is `openai`, the TUI hook also renders a small sidebar footer status:
+
+- `Codex LB / native OpenAI` in native mode.
+- `Codex LB / routing via codex-lb` in codex-lb mode.
+
+The sidebar status is hidden for non-OpenAI providers.
 
 ## Behavior
 
@@ -68,6 +75,8 @@ In codex-lb mode it installs in-memory fetch routers that rewrite only OpenAI/Ch
 - `https://chatgpt.com/backend-api/codex/...`
 
 Non-OpenAI requests pass through unchanged. The plugin preserves existing provider/model options such as `provider.openai.models.*.options.websearch`, and codex-lb mode also routes supported `opencode-websearch` OpenAI/ChatGPT Responses requests through codex-lb.
+
+codex-lb mode is fail-closed for OpenAI/ChatGPT API traffic. If a request has been selected for codex-lb routing and codex-lb fails, the error is surfaced to OpenCode; the plugin does not retry the same request against native OpenAI/ChatGPT. If the router has already observed `codex-lb` mode and the workspace mode file becomes temporarily unreadable, it keeps routing target requests through codex-lb instead of silently falling back to native OpenAI.
 
 It does not set `provider.openai.options.fetch`, so OpenCode's built-in OpenAI/ChatGPT OAuth fetch path remains intact in native mode.
 

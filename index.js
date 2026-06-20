@@ -41,10 +41,15 @@ export function stateFileFor(directory, stateRoot = defaultStateRoot()) {
   return join(stateRoot, `${workspaceKey(directory)}.json`)
 }
 
+async function readModeStrict(directory, stateRoot = defaultStateRoot()) {
+  const parsed = JSON.parse(await readFile(stateFileFor(directory, stateRoot), "utf8"))
+  if (parsed.mode === "codex-lb" || parsed.mode === "openai") return parsed.mode
+  throw new Error(`${SERVICE}: invalid mode state`)
+}
+
 export async function readMode(directory, stateRoot = defaultStateRoot()) {
   try {
-    const parsed = JSON.parse(await readFile(stateFileFor(directory, stateRoot), "utf8"))
-    return parsed.mode === "codex-lb" ? "codex-lb" : "openai"
+    return await readModeStrict(directory, stateRoot)
   } catch {
     return "openai"
   }
@@ -122,9 +127,18 @@ export function createCodexLbFetch(options, upstream = fetch) {
   }
 }
 
-export function createModeRoutingFetch({ directory, stateRoot, options, upstream = fetch }) {
+export function createModeRoutingFetch({ directory, stateRoot, options, upstream = fetch, modeState }) {
+  const memory = modeState ?? { lastMode: "openai" }
   return async (input, init) => {
-    if ((await readMode(directory, stateRoot)) !== "codex-lb") return callFetch(upstream, input, init)
+    let mode
+    try {
+      mode = await readModeStrict(directory, stateRoot)
+      memory.lastMode = mode
+    } catch {
+      mode = memory.lastMode
+    }
+
+    if (mode !== "codex-lb") return callFetch(upstream, input, init)
     if (!shouldRewriteURL(input)) return callFetch(upstream, input, init)
 
     const [nextInput, nextInit] = rewriteFetchArgs(input, init, options)
@@ -135,7 +149,7 @@ export function createModeRoutingFetch({ directory, stateRoot, options, upstream
 function createGlobalFetchDispatcher(fetchGlobal, state) {
   return async (input, init) => {
     let upstream = (nextInput, nextInit) => callFetch((finalInput, finalInit) => state.original.call(fetchGlobal, finalInput, finalInit), nextInput, nextInit)
-    for (const layer of state.layers) upstream = createModeRoutingFetch({ ...layer, upstream })
+    for (const layer of state.layers) upstream = createModeRoutingFetch({ ...layer, upstream, modeState: layer.modeState })
     return callFetch(upstream, input, init)
   }
 }
@@ -158,7 +172,7 @@ export function installGlobalFetchRouter({ directory, stateRoot, options, fetchG
   const state = fetchGlobal[FETCH_ROUTER_STATE] ?? createGlobalFetchState(fetchGlobal)
   fetchGlobal[FETCH_ROUTER_STATE] = state
 
-  const layer = { directory, stateRoot, options }
+  const layer = { directory, stateRoot, options, modeState: { lastMode: "openai" } }
   state.layers.push(layer)
   enableGlobalFetchDispatcher(fetchGlobal, state)
 

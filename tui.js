@@ -1,9 +1,15 @@
+import { createElement, createTextNode, insertNode, setProp } from "@opentui/solid"
+
 import { COMMAND, readMode, toggleMode, writeMode } from "./index.js"
 
 const SERVICE = "opencode-codex-lb-switcher"
 
 export function indicatorText(mode) {
   return mode === "codex-lb" ? "codex-lb" : ""
+}
+
+export function sidebarStatusText(mode) {
+  return mode === "codex-lb" ? "routing via codex-lb" : "native OpenAI"
 }
 
 function directoryFor(api) {
@@ -26,6 +32,36 @@ function showToast(api, variant, title, message) {
 
 function requestRender(api) {
   api.renderer?.requestRender?.()
+}
+
+function isOpenAISession(api, sessionID) {
+  if (!sessionID) return false
+  return api.state?.session?.get?.(sessionID)?.model?.providerID === "openai"
+}
+
+const solidView = { createElement, createTextNode, insertNode, setProp }
+
+function textNode(value, props = {}, view = solidView) {
+  const element = view.createElement("text")
+  for (const [key, prop] of Object.entries(props)) view.setProp(element, key, prop)
+  view.insertNode(element, view.createTextNode(value))
+  return element
+}
+
+export function createSidebarStatusElement(api, mode, view = solidView) {
+  const theme = api.theme?.current ?? {}
+  const container = view.createElement("box")
+  const title = view.createElement("text")
+  const titleBold = view.createElement("b")
+  const detailColor = mode === "codex-lb" ? theme.success : theme.textMuted
+
+  view.setProp(container, "flexDirection", "column")
+  view.setProp(title, "fg", theme.text)
+  view.insertNode(titleBold, view.createTextNode("Codex LB"))
+  view.insertNode(title, titleBold)
+  view.insertNode(container, title)
+  view.insertNode(container, textNode(`  ${sidebarStatusText(mode)}`, { fg: detailColor }, view))
+  return container
 }
 
 async function applyMode(api, directory, mode, stateRoot) {
@@ -112,33 +148,51 @@ export async function registerCodexLbCommand(api, { directory, stateRoot }) {
   }
 }
 
-export async function tui(api) {
-  const directory = directoryFor(api)
-  let mode = await readMode(directory)
+export async function registerSidebarStatus(api, { directory, stateRoot }) {
+  if (typeof api.slots?.register !== "function") return () => {}
+
+  let mode = await readMode(directory, stateRoot)
   let disposed = false
   let inFlight = false
-
-  await registerCodexLbCommand(api, { directory })
 
   async function refresh() {
     if (disposed || inFlight) return
     inFlight = true
     try {
-      const next = await readMode(directory)
+      const next = await readMode(directory, stateRoot)
       if (next !== mode) {
         mode = next
-        api.renderer.requestRender()
+        requestRender(api)
       }
     } finally {
       inFlight = false
     }
   }
 
+  api.slots.register({
+    order: 160,
+    slots: {
+      sidebar_footer(_ctx, props = {}) {
+        if (!isOpenAISession(api, props.session_id)) return null
+        return createSidebarStatusElement(api, mode)
+      },
+    },
+  })
+
   const timer = setInterval(refresh, 1000)
-  api.lifecycle.onDispose(() => {
+  const dispose = () => {
     disposed = true
     clearInterval(timer)
-  })
+  }
+  api.lifecycle?.onDispose?.(dispose)
+  return dispose
+}
+
+export async function tui(api) {
+  const directory = directoryFor(api)
+
+  await registerCodexLbCommand(api, { directory })
+  await registerSidebarStatus(api, { directory })
 }
 
 export default {

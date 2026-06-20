@@ -1,6 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { mkdtemp, rm } from "node:fs/promises"
+import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
 
@@ -41,7 +41,11 @@ function makeClient() {
   }
 }
 
-function makeTuiApi(directory, statusBySession = new Map([["ses", { type: "idle" }]])) {
+function makeTuiApi(
+  directory,
+  statusBySession = new Map([["ses", { type: "idle" }]]),
+  sessionByID = new Map([["ses", { model: { providerID: "openai" } }]]),
+) {
   const commands = []
   const events = new Map()
   const toasts = []
@@ -58,6 +62,9 @@ function makeTuiApi(directory, statusBySession = new Map([["ses", { type: "idle"
     state: {
       path: { directory, worktree: directory },
       session: {
+        get(sessionID) {
+          return sessionByID.get(sessionID)
+        },
         status(sessionID) {
           return statusBySession.get(sessionID)
         },
@@ -84,6 +91,15 @@ function makeTuiApi(directory, statusBySession = new Map([["ses", { type: "idle"
     renderer: {
       requestRender() {
         renders.push(true)
+      },
+    },
+    theme: {
+      current: {
+        text: "text",
+        textMuted: "muted",
+        success: "success",
+        warning: "warning",
+        error: "error",
       },
     },
     lifecycle: {
@@ -315,6 +331,58 @@ test("createModeRoutingFetch routes OpenAI API requests through codex-lb in code
   }
 })
 
+test("createModeRoutingFetch keeps codex-lb fail-closed after state read failure", async () => {
+  const dir = await tempDir()
+  const stateRoot = await tempDir()
+  const calls = []
+  const upstream = async (input, init) => {
+    const request = new Request(input, init)
+    calls.push({ url: request.url, auth: request.headers.get("authorization") })
+    return new Response("{}", { status: 200 })
+  }
+  try {
+    await writeMode(dir, "codex-lb", stateRoot)
+    const routed = createModeRoutingFetch({ directory: dir, stateRoot, options: makeRouteOptions(), upstream })
+
+    await routed("https://api.openai.com/v1/responses", { headers: { authorization: "Bearer openai" } })
+    await writeFile(stateFileFor(dir, stateRoot), "{")
+    await routed("https://api.openai.com/v1/responses", { headers: { authorization: "Bearer openai" } })
+
+    assert.deepEqual(calls, [
+      { url: "http://127.0.0.1:2455/v1/responses", auth: "Bearer sk-clb" },
+      { url: "http://127.0.0.1:2455/v1/responses", auth: "Bearer sk-clb" },
+    ])
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+    await rm(stateRoot, { recursive: true, force: true })
+  }
+})
+
+test("createModeRoutingFetch propagates codex-lb failures without native retry", async () => {
+  const dir = await tempDir()
+  const stateRoot = await tempDir()
+  const calls = []
+  const upstream = async (input, init) => {
+    const request = new Request(input, init)
+    calls.push(request.url)
+    throw new Error("codex-lb unavailable")
+  }
+  try {
+    await writeMode(dir, "codex-lb", stateRoot)
+    const routed = createModeRoutingFetch({ directory: dir, stateRoot, options: makeRouteOptions(), upstream })
+
+    await assert.rejects(
+      () => routed("https://api.openai.com/v1/responses", { headers: { authorization: "Bearer openai" } }),
+      /codex-lb unavailable/,
+    )
+
+    assert.deepEqual(calls, ["http://127.0.0.1:2455/v1/responses"])
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+    await rm(stateRoot, { recursive: true, force: true })
+  }
+})
+
 test("createModeRoutingFetch routes opencode-websearch ChatGPT Responses through codex-lb", async () => {
   const dir = await tempDir()
   const stateRoot = await tempDir()
@@ -405,6 +473,36 @@ test("installGlobalFetchRouter wraps and restores global fetch safely", async ()
     assert.notEqual(fetchGlobal.fetch, originalFetch)
     await dispose()
     assert.equal(fetchGlobal.fetch, originalFetch)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+    await rm(stateRoot, { recursive: true, force: true })
+  }
+})
+
+test("installGlobalFetchRouter keeps codex-lb fail-closed after state read failure", async () => {
+  const dir = await tempDir()
+  const stateRoot = await tempDir()
+  const calls = []
+  const fetchGlobal = {
+    fetch: async (input, init) => {
+      const request = new Request(input, init)
+      calls.push({ url: request.url, auth: request.headers.get("authorization") })
+      return new Response("{}", { status: 200 })
+    },
+  }
+  try {
+    await writeMode(dir, "codex-lb", stateRoot)
+    const dispose = installGlobalFetchRouter({ directory: dir, stateRoot, options: makeRouteOptions(), fetchGlobal })
+
+    await fetchGlobal.fetch("https://api.openai.com/v1/responses", { headers: { authorization: "Bearer openai" } })
+    await writeFile(stateFileFor(dir, stateRoot), "{")
+    await fetchGlobal.fetch("https://api.openai.com/v1/responses", { headers: { authorization: "Bearer openai" } })
+    await dispose()
+
+    assert.deepEqual(calls, [
+      { url: "http://127.0.0.1:2455/v1/responses", auth: "Bearer sk-clb" },
+      { url: "http://127.0.0.1:2455/v1/responses", auth: "Bearer sk-clb" },
+    ])
   } finally {
     await rm(dir, { recursive: true, force: true })
     await rm(stateRoot, { recursive: true, force: true })
@@ -700,12 +798,93 @@ test("tui does not register prompt-right slots with bare string children", async
     api = makeTuiApi(dir)
     await tuiPlugin.tui(api, undefined, { stateRoot })
 
-    assert.equal(api.slotRegistrations.length, 0)
+    assert.equal(api.slotRegistrations.some((registration) => registration.slots?.session_prompt_right), false)
   } finally {
     for (const dispose of api?.disposers ?? []) dispose()
     await rm(dir, { recursive: true, force: true })
     await rm(stateRoot, { recursive: true, force: true })
   }
+})
+
+test("registerSidebarStatus registers sidebar_footer slot", async () => {
+  const dir = await tempDir()
+  const stateRoot = await tempDir()
+  let api
+  try {
+    const { registerSidebarStatus } = await import("../tui.js")
+    assert.equal(typeof registerSidebarStatus, "function")
+    api = makeTuiApi(dir)
+
+    await registerSidebarStatus(api, { directory: dir, stateRoot })
+
+    assert.equal(api.slotRegistrations.length, 1)
+    assert.equal(api.slotRegistrations[0].order, 160)
+    assert.equal(typeof api.slotRegistrations[0].slots.sidebar_footer, "function")
+  } finally {
+    for (const dispose of api?.disposers ?? []) dispose()
+    await rm(dir, { recursive: true, force: true })
+    await rm(stateRoot, { recursive: true, force: true })
+  }
+})
+
+test("sidebar status renders only for OpenAI sessions", async () => {
+  const dir = await tempDir()
+  const stateRoot = await tempDir()
+  let api
+  try {
+    const { registerSidebarStatus } = await import("../tui.js")
+    api = makeTuiApi(dir, new Map([["ses", { type: "idle" }]]), new Map([["ses", { model: { providerID: "anthropic" } }]]))
+    await registerSidebarStatus(api, { directory: dir, stateRoot })
+
+    const rendered = api.slotRegistrations[0].slots.sidebar_footer({}, { session_id: "ses" })
+
+    assert.equal(rendered, null)
+  } finally {
+    for (const dispose of api?.disposers ?? []) dispose()
+    await rm(dir, { recursive: true, force: true })
+    await rm(stateRoot, { recursive: true, force: true })
+  }
+})
+
+test("sidebar status builds a real element shape for OpenAI sessions", async () => {
+  const { createSidebarStatusElement } = await import("../tui.js")
+  const api = makeTuiApi("/tmp/worktree")
+  const view = {
+    createElement(type) {
+      return { type, props: {}, children: [] }
+    },
+    createTextNode(value) {
+      return { type: "text-node", value }
+    },
+    insertNode(parent, child) {
+      parent.children.push(child)
+    },
+    setProp(element, key, value) {
+      element.props[key] = value
+    },
+  }
+
+  const rendered = createSidebarStatusElement(api, "codex-lb", view)
+
+  assert.deepEqual(rendered, {
+    type: "box",
+    props: { flexDirection: "column" },
+    children: [
+      {
+        type: "text",
+        props: { fg: "text" },
+        children: [{ type: "b", props: {}, children: [{ type: "text-node", value: "Codex LB" }] }],
+      },
+      { type: "text", props: { fg: "success" }, children: [{ type: "text-node", value: "  routing via codex-lb" }] },
+    ],
+  })
+})
+
+test("sidebarStatusText labels native and codex-lb modes", async () => {
+  const { sidebarStatusText } = await import("../tui.js")
+
+  assert.equal(sidebarStatusText("openai"), "native OpenAI")
+  assert.equal(sidebarStatusText("codex-lb"), "routing via codex-lb")
 })
 
 test("indicatorText only shows codex-lb mode", () => {
