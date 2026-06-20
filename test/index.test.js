@@ -810,7 +810,7 @@ test("tui does not register prompt-right slots with bare string children", async
   }
 })
 
-test("registerSidebarStatus registers sidebar_footer slot", async () => {
+test("registerSidebarStatus registers sidebar_content slot", async () => {
   const dir = await tempDir()
   const stateRoot = await tempDir()
   let api
@@ -823,7 +823,7 @@ test("registerSidebarStatus registers sidebar_footer slot", async () => {
 
     assert.equal(api.slotRegistrations.length, 1)
     assert.equal(api.slotRegistrations[0].order, 160)
-    assert.equal(typeof api.slotRegistrations[0].slots.sidebar_footer, "function")
+    assert.equal(typeof api.slotRegistrations[0].slots.sidebar_content, "function")
   } finally {
     for (const dispose of api?.disposers ?? []) dispose()
     await rm(dir, { recursive: true, force: true })
@@ -840,7 +840,7 @@ test("sidebar status renders only for OpenAI sessions", async () => {
     api = makeTuiApi(dir, new Map([["ses", { type: "idle" }]]), new Map([["ses", { model: { providerID: "anthropic" } }]]))
     await registerSidebarStatus(api, { directory: dir, stateRoot })
 
-    const rendered = api.slotRegistrations[0].slots.sidebar_footer({}, { session_id: "ses" })
+    const rendered = api.slotRegistrations[0].slots.sidebar_content({}, { session_id: "ses" })
 
     assert.equal(rendered, null)
   } finally {

@@ -4,7 +4,7 @@
 
 **Goal:** Add an OpenAI-only sidebar status indicator and make codex-lb mode fail closed instead of silently falling back to native OpenAI/ChatGPT traffic.
 
-**Architecture:** The TUI plugin registers a safe `sidebar_footer` slot that renders real JSX only for sessions whose model provider is `openai`. The server-side global fetch router continues to preserve native OpenAI mode, but when the workspace mode is `codex-lb`, target OpenAI/ChatGPT API requests must either rewrite to codex-lb or fail; codex-lb errors are propagated and never retried against native upstream URLs.
+**Architecture:** The TUI plugin registers a safe `sidebar_content` slot that renders real JSX only for sessions whose model provider is `openai`. The server-side global fetch router continues to preserve native OpenAI mode, but when the workspace mode is `codex-lb`, target OpenAI/ChatGPT API requests must either rewrite to codex-lb or fail; codex-lb errors are propagated and never retried against native upstream URLs.
 
 **Tech Stack:** ESM JavaScript, Node `node --test`, OpenCode TUI slot API, OpenCode global plugin fetch routing, Git-pinned OpenCode plugin install.
 
@@ -26,7 +26,7 @@
 ## File Structure
 
 - `index.js`: tighten mode-routing fetch semantics and keep native passthrough unchanged.
-- `tui.js`: add sidebar footer status slot helpers and render OpenAI-only status.
+- `tui.js`: add sidebar status slot helpers and render OpenAI-only status.
 - `test/index.test.js`: add RED tests for fail-closed routing and sidebar rendering.
 - `README.md`: document sidebar status and fail-closed behavior.
 
@@ -70,7 +70,7 @@ Expected: all tests pass.
 
 - [ ] **Step 1: Write failing tests**
 
-Add tests that `sidebar_footer` is registered, returns null for non-OpenAI sessions, and returns a real JSX-like element for OpenAI sessions in both `openai` and `codex-lb` modes.
+Add tests that `sidebar_content` is registered, returns null for non-OpenAI sessions, and returns a real JSX-like element for OpenAI sessions in both `openai` and `codex-lb` modes.
 
 - [ ] **Step 2: Verify RED**
 
@@ -79,7 +79,7 @@ Expected: tests fail because sidebar registration does not exist yet.
 
 - [ ] **Step 3: Implement minimal sidebar slot**
 
-Register `sidebar_footer`; check `api.state.session.get(session_id)?.model.providerID`; render only when provider is `openai`; use element objects/JSX-compatible values, never bare strings.
+Register `sidebar_content`; check `api.state.session.get(session_id)?.model.providerID`; render only when provider is `openai`; use element objects/JSX-compatible values, never bare strings.
 
 - [ ] **Step 4: Verify GREEN**
 

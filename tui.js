@@ -182,7 +182,7 @@ export async function registerSidebarStatus(api, { directory, stateRoot }) {
   api.slots.register({
     order: 160,
     slots: {
-      sidebar_footer(_ctx, props = {}) {
+      sidebar_content(_ctx, props = {}) {
         if (!isOpenAISession(api, props.session_id)) return null
         return createSidebarStatusElement(api, mode)
       },

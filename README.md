@@ -56,7 +56,7 @@ If the current session is idle, the mode is written immediately. If the current 
 
 The package registers `/codex-lb` from its TUI hook. It does not render a prompt-right hint; that slot is intentionally avoided because bare text children can crash OpenTUI.
 
-For sessions whose current model provider is `openai`, the TUI hook also renders a small sidebar footer status:
+For sessions whose current model provider is `openai`, the TUI hook also renders a small sidebar status:
 
 - `Codex LB / native OpenAI` in native mode.
 - `Codex LB / routing via codex-lb` in codex-lb mode.
