@@ -41,7 +41,7 @@ export function currentSessionID(api) {
 export function isSessionBusy(api, sessionID) {
   if (!sessionID) return false
   const status = api.state?.session?.status?.(sessionID)
-  return status?.type !== "idle"
+  return status?.type === "busy" || status?.type === "retry"
 }
 
 function showToast(api, variant, title, message) {

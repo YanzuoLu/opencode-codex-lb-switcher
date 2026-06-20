@@ -826,6 +826,25 @@ test("registerCodexLbCommand toggles immediately when current session is idle", 
   }
 })
 
+test("registerCodexLbCommand toggles immediately when session status is not hydrated", async () => {
+  const dir = await tempDir()
+  const stateRoot = await tempDir()
+  try {
+    const api = makeTuiApi(dir, new Map())
+    await registerCodexLbCommand(api, { directory: dir, stateRoot })
+    const command = api.commands[0]()[0]
+
+    await command.onSelect()
+
+    assert.equal(await readMode(dir, stateRoot), "codex-lb")
+    assert.equal(api.toasts[0].variant, "success")
+    assert.equal(api.toasts[0].message, "codex-lb mode enabled")
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+    await rm(stateRoot, { recursive: true, force: true })
+  }
+})
+
 test("registerCodexLbCommand updates sidebar signal immediately", async () => {
   const dir = await tempDir()
   const stateRoot = await tempDir()
