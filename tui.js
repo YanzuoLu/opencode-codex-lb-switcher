@@ -63,8 +63,14 @@ let defaultSolidView
 
 async function loadSolidView() {
   if (defaultSolidView) return defaultSolidView
-  if (typeof Bun !== "undefined") await import("@opentui/solid/runtime-plugin-support")
-  const { createElement, insert, setProp } = await import("@opentui/solid")
+  let solid
+  if (typeof Bun !== "undefined") {
+    await import("@opentui/solid/runtime-plugin-support")
+    solid = await import("opentui:runtime-module:%40opentui%2Fsolid")
+  } else {
+    solid = await import("@opentui/solid")
+  }
+  const { createElement, insert, setProp } = solid
   defaultSolidView = { createElement, insert, setProp }
   return defaultSolidView
 }
