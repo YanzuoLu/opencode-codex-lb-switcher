@@ -60,8 +60,12 @@ The package registers `/codex-lb` from its TUI hook. It does not render a prompt
 
 For sessions whose current model provider is `openai`, the TUI hook also renders a small sidebar status:
 
-- `Codex LB: native OpenAI` in native mode.
-- `Codex LB: routing via codex-lb` in codex-lb mode.
+```text
+Codex-LB
+enabled: off
+```
+
+In `codex-lb` mode the second line changes to `enabled: on`.
 
 The sidebar status is hidden for non-OpenAI providers.
 

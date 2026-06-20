@@ -923,7 +923,8 @@ test("registerSidebarStatus renders status with injected OpenTUI view", async ()
     const rendered = api.slotRegistrations[0].slots.sidebar_content({}, { session_id: "ses" })
 
     assert.equal(rendered.type, "box")
-    assert.equal(rendered.children[0].children[0], "Codex LB: native OpenAI")
+    assert.equal(rendered.children[0].children[0], "Codex-LB")
+    assert.equal(rendered.children[1].children[0], "enabled: off")
   } finally {
     for (const dispose of api?.disposers ?? []) dispose()
     await rm(dir, { recursive: true, force: true })
@@ -1020,8 +1021,13 @@ test("sidebar status builds a real element shape for OpenAI sessions", async () 
     children: [
       {
         type: "text",
-        props: { fg: "success" },
-        children: ["Codex LB: routing via codex-lb"],
+        props: { fg: "text" },
+        children: ["Codex-LB"],
+      },
+      {
+        type: "text",
+        props: { fg: "muted" },
+        children: ["enabled: on"],
       },
     ],
   })
@@ -1034,14 +1040,15 @@ test("sidebar status reads direct TUI theme shape", async () => {
 
   const rendered = createSidebarStatusElement(api, "codex-lb", makeOpenTuiView())
 
-  assert.equal(rendered.children[0].props.fg, "success")
+  assert.equal(rendered.children[0].props.fg, "text")
+  assert.equal(rendered.children[1].props.fg, "muted")
 })
 
-test("sidebarStatusText labels native and codex-lb modes", async () => {
+test("sidebarStatusText labels enabled state", async () => {
   const { sidebarStatusText } = await import("../tui.js")
 
-  assert.equal(sidebarStatusText("openai"), "native OpenAI")
-  assert.equal(sidebarStatusText("codex-lb"), "routing via codex-lb")
+  assert.equal(sidebarStatusText("openai"), "enabled: off")
+  assert.equal(sidebarStatusText("codex-lb"), "enabled: on")
 })
 
 test("indicatorText only shows codex-lb mode", () => {

@@ -27,7 +27,7 @@ export function indicatorText(mode) {
 }
 
 export function sidebarStatusText(mode) {
-  return mode === "codex-lb" ? "routing via codex-lb" : "native OpenAI"
+  return mode === "codex-lb" ? "enabled: on" : "enabled: off"
 }
 
 function directoryFor(api) {
@@ -117,8 +117,12 @@ function textNode(value, props = {}, view = defaultSolidView) {
 export function createSidebarStatusElement(api, mode, view = defaultSolidView) {
   if (!view) throw new Error(`${SERVICE}: TUI runtime is not initialized`)
   const theme = api.theme?.current ?? api.theme ?? {}
-  const detailColor = mode === "codex-lb" ? theme.success : theme.textMuted
-  return elementNode("box", { width: "100%", flexDirection: "column" }, [textNode(`Codex LB: ${sidebarStatusText(mode)}`, { fg: detailColor }, view)], view)
+  return elementNode(
+    "box",
+    { width: "100%", flexDirection: "column" },
+    [textNode("Codex-LB", { fg: theme.text }, view), textNode(sidebarStatusText(mode), { fg: theme.textMuted }, view)],
+    view,
+  )
 }
 
 async function applyMode(api, directory, mode, stateRoot) {
