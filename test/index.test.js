@@ -862,6 +862,14 @@ test("sidebar status detects OpenAI provider from session messages", async () =>
   assert.equal(isOpenAISession(api, "ses"), true)
 })
 
+test("sidebar status detects OpenAI provider from config model", async () => {
+  const { isOpenAISession } = await import("../tui.js")
+  const api = makeTuiApi("/tmp/worktree", new Map([["ses", { type: "idle" }]]), new Map([["ses", { id: "ses" }]]))
+  api.state.config = { model: "openai/gpt-5.5" }
+
+  assert.equal(isOpenAISession(api, "ses"), true)
+})
+
 test("sidebar status builds a real element shape for OpenAI sessions", async () => {
   const { createSidebarStatusElement } = await import("../tui.js")
   const api = makeTuiApi("/tmp/worktree")

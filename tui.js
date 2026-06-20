@@ -38,6 +38,11 @@ function messageProviderID(message) {
   return message?.providerID ?? message?.model?.providerID
 }
 
+function modelProviderID(model) {
+  if (typeof model === "string") return model.split("/", 1)[0]
+  return model?.providerID
+}
+
 export function isOpenAISession(api, sessionID) {
   if (!sessionID) return false
   if (api.state?.session?.get?.(sessionID)?.model?.providerID === "openai") return true
@@ -46,7 +51,7 @@ export function isOpenAISession(api, sessionID) {
     const providerID = messageProviderID(messages[index])
     if (providerID) return providerID === "openai"
   }
-  return false
+  return modelProviderID(api.state?.config?.model) === "openai"
 }
 
 const solidView = { createElement, createTextNode, insertNode, setProp }
