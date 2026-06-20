@@ -73,7 +73,10 @@ export async function registerCodexLbCommand(api, { directory, stateRoot }) {
       priority: 900,
       commands: [
         {
+          namespace: "palette",
           name: COMMAND,
+          desc: "Toggle codex-lb mode",
+          slashName: COMMAND,
           ...commandFields(),
           async run() {
             await toggleCodexLbMode(api, directory, stateRoot, pendingBySession)

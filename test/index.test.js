@@ -602,10 +602,13 @@ test("registerCodexLbCommand registers keymap command when legacy command API is
     await registerCodexLbCommand(api, { directory: dir, stateRoot })
 
     const command = api.layers[0].commands[0]
+    assert.equal(command.namespace, "palette")
     assert.equal(command.name, COMMAND)
     assert.equal(command.title, "Toggle codex-lb")
     assert.equal(command.value, COMMAND)
+    assert.equal(command.desc, "Toggle codex-lb mode")
     assert.equal(command.description, "Toggle codex-lb mode")
+    assert.equal(command.slashName, COMMAND)
     assert.equal(command.slash.name, COMMAND)
     assert.equal(typeof command.run, "function")
 
