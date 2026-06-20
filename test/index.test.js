@@ -6,7 +6,6 @@ import { tmpdir } from "node:os"
 
 import plugin, {
   COMMAND,
-  applyOpenAIRouterConfig,
   createCodexLbFetch,
   createModeRoutingFetch,
   installGlobalFetchRouter,
@@ -454,42 +453,71 @@ test("installGlobalFetchRouter does not overwrite a later external wrapper on an
   }
 })
 
-test("applyOpenAIRouterConfig preserves websearch model options and only sets fetch", () => {
-  const cfg = {
-    provider: {
-      openai: {
-        models: {
-          "gpt-5.5": { options: { websearch: "auto" } },
-        },
-        options: {
-          apiKey: "sk-openai",
-          baseURL: "https://api.openai.com/v1",
-        },
-      },
-    },
-  }
-  applyOpenAIRouterConfig(cfg, { directory: "/tmp/project", options: makeRouteOptions(), upstream: async () => new Response("{}") })
+test("server installs global fetch router but does not inject prompt command or codex-lb credentials", async () => {
+  const dir = await tempDir()
+  const stateRoot = await tempDir()
+  const fetchGlobal = { fetch: async () => new Response("{}", { status: 200 }) }
+  const originalFetch = fetchGlobal.fetch
+  try {
+    const hooks = await server({ client: makeClient(), directory: dir }, makeRouteOptions(), { stateRoot, fetchGlobal })
+    const cfg = { provider: { openai: { models: { "gpt-5.5": { options: { websearch: "auto" } } } } } }
+    await hooks.config?.(cfg)
 
-  assert.equal(cfg.provider.openai.models["gpt-5.5"].options.websearch, "auto")
-  assert.equal(cfg.provider.openai.options.apiKey, "sk-openai")
-  assert.equal(cfg.provider.openai.options.baseURL, "https://api.openai.com/v1")
-  assert.equal(typeof cfg.provider.openai.options.fetch, "function")
+    assert.notEqual(fetchGlobal.fetch, originalFetch)
+    assert.equal(cfg.command, undefined)
+    assert.equal(cfg.provider.openai.models["gpt-5.5"].options.websearch, "auto")
+    assert.equal(cfg.provider.openai.options, undefined)
+    assert.equal(typeof hooks["command.execute.before"], "undefined")
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+    await rm(stateRoot, { recursive: true, force: true })
+  }
 })
 
-test("server config installs fetch router but does not inject prompt command or codex-lb credentials", async () => {
+test("server config does not override OpenCode OAuth provider fetch", async () => {
   const dir = await tempDir()
   const stateRoot = await tempDir()
   const fetchGlobal = { fetch: async () => new Response("{}", { status: 200 }) }
   try {
     const hooks = await server({ client: makeClient(), directory: dir }, makeRouteOptions(), { stateRoot, fetchGlobal })
-    const cfg = { provider: { openai: { models: { "gpt-5.5": { options: { websearch: "auto" } } } } } }
-    await hooks.config(cfg)
+    const oauthFetch = async () => new Response("oauth")
+    const cfg = { provider: { openai: { options: { fetch: oauthFetch } } } }
 
-    assert.equal(cfg.command, undefined)
-    assert.equal(cfg.provider.openai.options.baseURL, undefined)
-    assert.equal(cfg.provider.openai.options.apiKey, undefined)
-    assert.equal(typeof cfg.provider.openai.options.fetch, "function")
-    assert.equal(typeof hooks["command.execute.before"], "undefined")
+    await hooks.config?.(cfg)
+
+    assert.equal(cfg.provider.openai.options.fetch, oauthFetch)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+    await rm(stateRoot, { recursive: true, force: true })
+  }
+})
+
+test("server preserves OAuth fetch while global router captures ChatGPT codex traffic", async () => {
+  const dir = await tempDir()
+  const stateRoot = await tempDir()
+  const calls = []
+  const fetchGlobal = {
+    fetch: async (input, init) => {
+      const request = new Request(input, init)
+      calls.push({ url: request.url, auth: request.headers.get("authorization") })
+      return new Response("{}", { status: 200 })
+    },
+  }
+  try {
+    const hooks = await server({ client: makeClient(), directory: dir }, makeRouteOptions(), { stateRoot, fetchGlobal })
+    const oauthFetch = async (_input, init) => {
+      const headers = new Headers(init?.headers)
+      headers.set("authorization", "Bearer oauth")
+      return fetchGlobal.fetch("https://chatgpt.com/backend-api/codex/responses", { ...init, headers })
+    }
+    const cfg = { provider: { openai: { options: { fetch: oauthFetch } } } }
+
+    await hooks.config?.(cfg)
+    await writeMode(dir, "codex-lb", stateRoot)
+    await cfg.provider.openai.options.fetch("https://api.openai.com/v1/responses", { headers: { authorization: "Bearer dummy" } })
+
+    assert.equal(cfg.provider.openai.options.fetch, oauthFetch)
+    assert.deepEqual(calls, [{ url: "http://127.0.0.1:2455/v1/responses", auth: "Bearer sk-clb" }])
   } finally {
     await rm(dir, { recursive: true, force: true })
     await rm(stateRoot, { recursive: true, force: true })

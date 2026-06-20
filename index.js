@@ -171,23 +171,12 @@ export function installGlobalFetchRouter({ directory, stateRoot, options, fetchG
   }
 }
 
-export function applyOpenAIRouterConfig(config, { directory, stateRoot, options, upstream }) {
-  config.provider ??= {}
-  config.provider.openai ??= {}
-  config.provider.openai.options ??= {}
-  const existingFetch = config.provider.openai.options.fetch ?? upstream ?? fetch
-  config.provider.openai.options.fetch = createModeRoutingFetch({ directory, stateRoot, options, upstream: existingFetch })
-}
-
 export async function server({ directory }, rawOptions, testOptions = {}) {
   const options = normalizeOptions(rawOptions)
   const stateRoot = testOptions.stateRoot
   const restoreFetch = installGlobalFetchRouter({ directory, stateRoot, options, fetchGlobal: testOptions.fetchGlobal ?? globalThis })
 
   return {
-    async config(config) {
-      applyOpenAIRouterConfig(config, { directory, stateRoot, options })
-    },
     async dispose() {
       await restoreFetch()
     },

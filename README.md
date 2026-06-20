@@ -57,6 +57,8 @@ In codex-lb mode it installs in-memory fetch routers that rewrite only OpenAI/Ch
 
 Non-OpenAI requests pass through unchanged. The plugin preserves existing provider/model options such as `provider.openai.models.*.options.websearch`, and codex-lb mode also routes supported `opencode-websearch` OpenAI/ChatGPT Responses requests through codex-lb.
 
+It does not set `provider.openai.options.fetch`, so OpenCode's built-in OpenAI/ChatGPT OAuth fetch path remains intact in native mode.
+
 It does not persist `baseURL` or `apiKey` outside your plugin config and does not edit `~/.local/share/opencode/auth.json`.
 
 ## Limitations
