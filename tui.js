@@ -1,4 +1,4 @@
-import { createElement, createTextNode, insertNode, setProp } from "@opentui/solid"
+import { createElement, insert, setProp } from "@opentui/solid"
 
 import { COMMAND, readMode, toggleMode, writeMode } from "./index.js"
 
@@ -57,12 +57,12 @@ export function isOpenAISession(api, sessionID) {
   return true
 }
 
-const solidView = { createElement, createTextNode, insertNode, setProp }
+const solidView = { createElement, insert, setProp }
 
 function textNode(value, props = {}, view = solidView) {
   const element = view.createElement("text")
   for (const [key, prop] of Object.entries(props)) view.setProp(element, key, prop)
-  view.insertNode(element, view.createTextNode(value))
+  view.insert(element, value)
   return element
 }
 

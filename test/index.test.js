@@ -884,10 +884,7 @@ test("sidebar status builds a real element shape for OpenAI sessions", async () 
     createElement(type) {
       return { type, props: {}, children: [] }
     },
-    createTextNode(value) {
-      return { type: "text-node", value }
-    },
-    insertNode(parent, child) {
+    insert(parent, child) {
       parent.children.push(child)
     },
     setProp(element, key, value) {
@@ -900,7 +897,7 @@ test("sidebar status builds a real element shape for OpenAI sessions", async () 
   assert.deepEqual(rendered, {
     type: "text",
     props: { fg: "success" },
-    children: [{ type: "text-node", value: "Codex LB: routing via codex-lb" }],
+    children: ["Codex LB: routing via codex-lb"],
   })
 })
 
