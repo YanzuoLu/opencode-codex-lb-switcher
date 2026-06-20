@@ -1,6 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { mkdtemp, rm, writeFile } from "node:fs/promises"
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
 
@@ -180,6 +180,13 @@ test("server and TUI plugin entries are separate OpenCode modules", () => {
   assert.equal(typeof tuiPlugin.tui, "function")
   assert.doesNotThrow(() => assertOpenCodeV1PluginShape(plugin, "server"))
   assert.doesNotThrow(() => assertOpenCodeV1PluginShape(tuiPlugin, "tui"))
+})
+
+test("package includes TUI runtime dependencies", async () => {
+  const pkg = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"))
+
+  assert.equal(pkg.dependencies?.["@opentui/solid"], "0.3.4")
+  assert.equal(pkg.dependencies?.["solid-js"], "1.9.12")
 })
 
 test("createCodexLbFetch rewrites v1 URLs and injects bearer auth", async () => {
