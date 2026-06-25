@@ -7,6 +7,10 @@
 import { createServer } from "node:http"
 import { WebSocketServer } from "ws"
 
+function vlog(message) {
+  if (process.env.MOCK_VERBOSE === "1") console.error(message)
+}
+
 function userText(body) {
   const input = body?.input
   if (typeof input === "string") return input
@@ -132,6 +136,7 @@ export function startMockCodexLb({ port = 0, mode = "ok", reply = "OK" } = {}) {
     }
     if (req.method === "POST" && req.url.startsWith("/v1/responses")) {
       // HTTP/SSE fallback path
+      vlog("[mock] HTTP POST /v1/responses")
       let raw = ""
       req.on("data", (c) => (raw += c))
       req.on("end", () => {
@@ -160,6 +165,7 @@ export function startMockCodexLb({ port = 0, mode = "ok", reply = "OK" } = {}) {
 
   const wss = new WebSocketServer({ server, path: "/v1/responses" })
   wss.on("connection", (socket, req) => {
+    vlog(`[mock] WS connection session-id=${req.headers["session-id"] ?? "(none)"} auth=${req.headers["authorization"] ? "yes" : "no"}`)
     connections.add(socket)
     socket.on("close", () => connections.delete(socket))
     socket.authHeader = req.headers["authorization"] ?? ""
@@ -206,9 +212,11 @@ export function startMockCodexLb({ port = 0, mode = "ok", reply = "OK" } = {}) {
   })
 }
 
-// Standalone entrypoint for the tmux harness.
-if (import.meta.url === `file://${process.argv[1]}`) {
-  const port = Number(process.argv[2] ?? 8499)
+// Standalone entrypoint for the tmux harness. Requires an explicit port argument so
+// it never starts a server when accidentally imported (e.g. by a test runner).
+if (import.meta.url === `file://${process.argv[1]}` && process.argv[2]) {
+  process.env.MOCK_VERBOSE = "1"
+  const port = Number(process.argv[2])
   const mode = process.argv[3] ?? "ok"
   const reply = process.argv[4] ?? process.env.MOCK_REPLY ?? "OK"
   startMockCodexLb({ port, mode, reply }).then((s) => {
