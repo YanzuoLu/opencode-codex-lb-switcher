@@ -1,20 +1,17 @@
-import { createHash } from "node:crypto"
-import { mkdir, readFile, writeFile } from "node:fs/promises"
-import { homedir } from "node:os"
-import { join } from "node:path"
+// opencode-codex-lb-switcher
+//
+// Registers a `codex-lb` provider that reuses OpenCode's built-in @ai-sdk/openai
+// Responses code path (so reasoning/encrypted-content behaves like native OpenAI)
+// but routes each turn through codex-lb's `/v1/responses` WebSocket. One socket per
+// conversation keeps codex-lb pinned to a single upstream account, which is what the
+// load balancer needs for session/account consistency. Switch by picking
+// `codex-lb/<model>` in the model picker; native `openai` (OAuth) is left untouched.
 
-export const COMMAND = "codex-lb"
+import { createWebSocketFetch } from "./src/ws-pool.js"
+
 const SERVICE = "opencode-codex-lb-switcher"
-const ALLOWED_OPTIONS = new Set(["baseURL", "apiKey"])
-const FETCH_ROUTER_STATE = Symbol.for(`${SERVICE}.fetch-router-state`)
-
-function defaultStateRoot() {
-  return join(homedir(), ".local", "share", SERVICE)
-}
-
-function workspaceKey(directory) {
-  return createHash("sha256").update(directory).digest("hex").slice(0, 24)
-}
+export const PROVIDER_ID = "codex-lb"
+const ALLOWED_OPTIONS = new Set(["baseURL", "apiKey", "models", "providerID"])
 
 function readStringOption(record, key) {
   const value = record[key]
@@ -31,186 +28,86 @@ export function normalizeOptions(options = {}) {
   for (const key of Object.keys(options)) {
     if (!ALLOWED_OPTIONS.has(key)) throw new Error(`${SERVICE}: unsupported option ${key}`)
   }
-  return {
+  const result = {
     baseURL: readStringOption(options, "baseURL").replace(/\/+$/, ""),
     apiKey: readStringOption(options, "apiKey"),
   }
-}
-
-export function stateFileFor(directory, stateRoot = defaultStateRoot()) {
-  return join(stateRoot, `${workspaceKey(directory)}.json`)
-}
-
-async function readModeStrict(directory, stateRoot = defaultStateRoot()) {
-  const parsed = JSON.parse(await readFile(stateFileFor(directory, stateRoot), "utf8"))
-  if (parsed.mode === "codex-lb" || parsed.mode === "openai") return parsed.mode
-  throw new Error(`${SERVICE}: invalid mode state`)
-}
-
-async function readModeForRouting(directory, stateRoot = defaultStateRoot()) {
-  try {
-    return await readModeStrict(directory, stateRoot)
-  } catch (error) {
-    if (error?.code === "ENOENT") return "openai"
-    throw error
-  }
-}
-
-export async function readMode(directory, stateRoot = defaultStateRoot()) {
-  try {
-    return await readModeStrict(directory, stateRoot)
-  } catch {
-    return "openai"
-  }
-}
-
-export async function writeMode(directory, mode, stateRoot = defaultStateRoot()) {
-  await mkdir(stateRoot, { recursive: true })
-  await writeFile(stateFileFor(directory, stateRoot), JSON.stringify({ mode }, null, 2))
-}
-
-export function toggleMode(mode) {
-  return mode === "codex-lb" ? "openai" : "codex-lb"
-}
-
-function toURL(input) {
-  if (input instanceof URL) return input
-  if (typeof input === "string") return new URL(input)
-  return new URL(input.url)
-}
-
-export function shouldRewriteURL(input) {
-  let url
-  try {
-    url = toURL(input)
-  } catch {
-    return false
-  }
-  if (url.protocol !== "https:") return false
-  if (url.hostname === "api.openai.com" && url.pathname.startsWith("/v1/")) return true
-  if (url.hostname === "chatgpt.com" && url.pathname.startsWith("/backend-api/codex/")) return true
-  return false
-}
-
-function rewriteSuffix(url) {
-  if (url.hostname === "api.openai.com") return url.pathname.replace(/^\/v1\/?/, "")
-  if (url.hostname === "chatgpt.com") return url.pathname.replace(/^\/backend-api\/codex\/?/, "")
-  return url.pathname.replace(/^\/+/, "")
-}
-
-export function rewriteCodexLbURL(input, baseURL) {
-  const original = toURL(input)
-  const base = new URL(baseURL.endsWith("/") ? baseURL : `${baseURL}/`)
-  return new URL(`${rewriteSuffix(original)}${original.search}`, base)
-}
-
-function hasInit(init) {
-  return init && Object.keys(init).length > 0
-}
-
-function callFetch(upstream, input, init) {
-  return init === undefined ? upstream(input) : upstream(input, init)
-}
-
-function rewriteFetchArgs(input, init, options) {
-  const rewritten = rewriteCodexLbURL(input, options.baseURL)
-  if (input instanceof Request) {
-    let request = new Request(rewritten, input)
-    if (hasInit(init)) request = new Request(request, init)
-    const headers = new Headers(request.headers)
-    headers.set("authorization", `Bearer ${options.apiKey}`)
-    return [new Request(request, { headers }), undefined]
-  }
-
-  const headers = new Headers(init?.headers)
-  headers.set("authorization", `Bearer ${options.apiKey}`)
-  return [rewritten, { ...init, headers }]
-}
-
-export function createCodexLbFetch(options, upstream = fetch) {
-  return async (input, init) => {
-    if (!shouldRewriteURL(input)) return callFetch(upstream, input, init)
-
-    const [nextInput, nextInit] = rewriteFetchArgs(input, init, options)
-    return callFetch(upstream, nextInput, nextInit)
-  }
-}
-
-export function createModeRoutingFetch({ directory, stateRoot, options, upstream = fetch, modeState }) {
-  const memory = modeState ?? { lastMode: undefined }
-  return async (input, init) => {
-    let mode
-    try {
-      mode = await readModeForRouting(directory, stateRoot)
-      memory.lastMode = mode
-    } catch {
-      mode = memory.lastMode
+  if (options.models !== undefined) {
+    if (!options.models || typeof options.models !== "object" || Array.isArray(options.models)) {
+      throw new Error(`${SERVICE}: models must be an object`)
     }
+    result.models = options.models
+  }
+  if (options.providerID !== undefined) result.providerID = readStringOption(options, "providerID")
+  return result
+}
 
-    if (!mode && shouldRewriteURL(input)) throw new Error(`${SERVICE}: mode state unavailable`)
-    if (!mode) return callFetch(upstream, input, init)
-    if (mode !== "codex-lb") return callFetch(upstream, input, init)
-    if (!shouldRewriteURL(input)) return callFetch(upstream, input, init)
-
-    const [nextInput, nextInit] = rewriteFetchArgs(input, init, options)
-    return callFetch(upstream, nextInput, nextInit)
+function reasoningModel(name, { context = 272000, output = 128000, attachment = true } = {}) {
+  return {
+    name,
+    reasoning: true,
+    tool_call: true,
+    attachment,
+    release_date: "2026-01-01",
+    options: { reasoningEffort: "medium", reasoningSummary: "auto", textVerbosity: "low" },
+    limit: { context, output },
   }
 }
 
-function createGlobalFetchDispatcher(fetchGlobal, state) {
-  return async (input, init) => {
-    let upstream = (nextInput, nextInit) => callFetch((finalInput, finalInit) => state.original.call(fetchGlobal, finalInput, finalInit), nextInput, nextInit)
-    for (const layer of state.layers) upstream = createModeRoutingFetch({ ...layer, upstream, modeState: layer.modeState })
-    return callFetch(upstream, input, init)
+export function defaultModels() {
+  return {
+    "gpt-5.5": reasoningModel("GPT-5.5"),
+    "gpt-5.4": reasoningModel("GPT-5.4"),
+    "gpt-5.4-mini": reasoningModel("GPT-5.4-Mini"),
+    "gpt-5.3-codex-spark": reasoningModel("GPT-5.3-Codex-Spark", { context: 128000, attachment: false }),
   }
 }
 
-function createGlobalFetchState(fetchGlobal) {
-  const state = {
-    original: fetchGlobal.fetch,
-    layers: [],
-    dispatcher: undefined,
-  }
-  state.dispatcher = createGlobalFetchDispatcher(fetchGlobal, state)
-  return state
-}
-
-function enableGlobalFetchDispatcher(fetchGlobal, state) {
-  if (fetchGlobal.fetch === state.original || fetchGlobal.fetch === state.dispatcher) fetchGlobal.fetch = state.dispatcher
-}
-
-export function installGlobalFetchRouter({ directory, stateRoot, options, fetchGlobal = globalThis }) {
-  const state = fetchGlobal[FETCH_ROUTER_STATE] ?? createGlobalFetchState(fetchGlobal)
-  fetchGlobal[FETCH_ROUTER_STATE] = state
-
-  const layer = { directory, stateRoot, options, modeState: { lastMode: "openai" } }
-  state.layers.push(layer)
-  enableGlobalFetchDispatcher(fetchGlobal, state)
-
-  return async () => {
-    const index = state.layers.indexOf(layer)
-    if (index === -1) return
-    state.layers.splice(index, 1)
-    if (state.layers.length === 0 && fetchGlobal.fetch === state.dispatcher) {
-      fetchGlobal.fetch = state.original
-      delete fetchGlobal[FETCH_ROUTER_STATE]
-    }
+export function buildProviderConfig(options, websocketFetch) {
+  return {
+    npm: "@ai-sdk/openai",
+    name: "Codex-LB",
+    options: {
+      baseURL: options.baseURL,
+      apiKey: options.apiKey,
+      // Restore the two behaviors OpenCode otherwise reserves for providerID "openai".
+      setCacheKey: true,
+      headerTimeout: 10000,
+      fetch: websocketFetch,
+    },
+    models: options.models ?? defaultModels(),
   }
 }
 
-export async function server({ directory }, rawOptions, testOptions = {}) {
+function providerIDOf(input) {
+  return input?.provider?.info?.id ?? input?.model?.providerID
+}
+
+export async function server(_input, rawOptions, testOptions = {}) {
   const options = normalizeOptions(rawOptions)
-  const stateRoot = testOptions.stateRoot
-  const restoreFetch = installGlobalFetchRouter({ directory, stateRoot, options, fetchGlobal: testOptions.fetchGlobal ?? globalThis })
+  const providerID = options.providerID ?? PROVIDER_ID
+  const websocketFetch = testOptions.websocketFetch ?? createWebSocketFetch({ WebSocketImpl: testOptions.WebSocketImpl })
 
   return {
+    async config(config) {
+      if (!config.provider || typeof config.provider !== "object") config.provider = {}
+      config.provider[providerID] = buildProviderConfig(options, websocketFetch)
+    },
+    async "chat.headers"(input, output) {
+      const pid = providerIDOf(input)
+      if (pid !== undefined && pid !== providerID) return
+      if (!output?.headers || typeof output.headers !== "object") return
+      output.headers["session-id"] = input.sessionID
+    },
+    async event({ event }) {
+      if (event?.type !== "session.deleted") return
+      const id = event.properties?.info?.id ?? event.properties?.sessionID ?? event.sessionID
+      if (id) websocketFetch.remove(id)
+    },
     async dispose() {
-      await restoreFetch()
+      websocketFetch.close()
     },
   }
 }
 
-export default {
-  id: SERVICE,
-  server,
-}
+export default { id: SERVICE, server }

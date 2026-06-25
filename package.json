@@ -1,32 +1,32 @@
 {
   "name": "opencode-codex-lb-switcher",
-  "version": "0.1.0",
-  "description": "Toggle OpenCode OpenAI traffic between native OpenAI and codex-lb.",
+  "version": "0.2.0",
+  "description": "OpenCode provider that routes the OpenAI Responses API through codex-lb over WebSocket.",
   "type": "module",
   "main": "./index.js",
   "exports": {
     ".": "./index.js",
-    "./server": "./index.js",
-    "./tui": "./tui.js"
+    "./server": "./index.js"
   },
   "files": [
     "index.js",
-    "tui.js",
+    "src",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
-    "test": "node --test"
-  },
-  "dependencies": {
-    "@opentui/solid": "0.3.4",
-    "solid-js": "1.9.12"
+    "test": "node --test test/*.test.js"
   },
   "keywords": [
     "opencode",
     "opencode-plugin",
     "codex-lb",
-    "openai"
+    "openai",
+    "responses",
+    "websocket"
   ],
-  "license": "MIT"
+  "license": "MIT",
+  "devDependencies": {
+    "ws": "8.21.0"
+  }
 }
