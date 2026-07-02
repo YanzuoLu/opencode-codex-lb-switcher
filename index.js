@@ -95,7 +95,7 @@ export async function server(_input, rawOptions, testOptions = {}) {
     },
     async "chat.headers"(input, output) {
       const pid = providerIDOf(input)
-      if (pid !== undefined && pid !== providerID) return
+      if (pid !== providerID) return
       if (!output?.headers || typeof output.headers !== "object") return
       output.headers["session-id"] = input.sessionID
     },

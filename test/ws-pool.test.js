@@ -82,6 +82,134 @@ test("reuses one socket across turns with the same session-id", async () => {
     await readAll(await wsFetch(mock.responsesUrl, streamingInit("sesX")))
     await readAll(await wsFetch(mock.responsesUrl, streamingInit("sesX")))
     assert.equal(mock.connectionCount(), 1)
+    assert.equal(mock.totalConnections(), 1)
+  } finally {
+    wsFetch.close()
+    await mock.close()
+  }
+})
+
+test("retries once on a pre-event 1001 close and succeeds on a fresh socket", async () => {
+  const mock = await startMockCodexLb({ mode: "close1001Idle", reply: "RETRY-OK" })
+  const wsFetch = createWebSocketFetch({ WebSocketImpl: WebSocket, httpFetch: async () => new Response("HTTP") })
+  try {
+    const res = await wsFetch(mock.responsesUrl, streamingInit("sesR"))
+    const text = await readAll(res)
+    assert.match(text, /"delta":"RETRY-OK"/)
+    assert.ok(text.trim().endsWith("data: [DONE]"))
+    assert.equal(mock.totalConnections(), 2)
+    assert.equal(mock.lastPayload().model, "gpt-5.5")
+  } finally {
+    wsFetch.close()
+    await mock.close()
+  }
+})
+
+test("retries once on a pre-event 1006 abnormal close and succeeds on a fresh socket", async () => {
+  const mock = await startMockCodexLb({ mode: "terminate1006Idle", reply: "RETRY-1006" })
+  const wsFetch = createWebSocketFetch({ WebSocketImpl: WebSocket, httpFetch: async () => new Response("HTTP") })
+  try {
+    const res = await wsFetch(mock.responsesUrl, streamingInit("ses6"))
+    const text = await readAll(res)
+    assert.match(text, /"delta":"RETRY-1006"/)
+    assert.ok(text.trim().endsWith("data: [DONE]"))
+    assert.equal(mock.totalConnections(), 2)
+  } finally {
+    wsFetch.close()
+    await mock.close()
+  }
+})
+
+test("pre-event retry is not counted as a stream failure (streamRetries: 0)", async () => {
+  const mock = await startMockCodexLb({ mode: "close1001Idle", reply: "OK" })
+  const wsFetch = createWebSocketFetch({
+    WebSocketImpl: WebSocket,
+    streamRetries: 0,
+    httpFetch: async () => new Response("HTTP-FALLBACK"),
+  })
+  try {
+    // Turn 1: pre-event 1001 close → single retry succeeds over WebSocket.
+    const t1 = await readAll(await wsFetch(mock.responsesUrl, streamingInit("sesZ")))
+    assert.match(t1, /"delta":"OK"/)
+    // If the retry had been mis-counted, streamRetries: 0 would flip the entry to
+    // fallback and this turn would return the HTTP passthrough instead.
+    const t2 = await readAll(await wsFetch(mock.responsesUrl, streamingInit("sesZ")))
+    assert.match(t2, /"delta":"OK"/)
+  } finally {
+    wsFetch.close()
+    await mock.close()
+  }
+})
+
+test("treats a pre-event 1000 close as terminal and does not retry", async () => {
+  const mock = await startMockCodexLb({ mode: "close1000PreEvent" })
+  const wsFetch = createWebSocketFetch({ WebSocketImpl: WebSocket, httpFetch: async () => new Response("HTTP") })
+  try {
+    const res = await wsFetch(mock.responsesUrl, streamingInit("sesT"))
+    await assert.rejects(() => res.text(), /closed before response\.completed \(code 1000, reason "clean close", no events/)
+    assert.equal(mock.totalConnections(), 1)
+  } finally {
+    wsFetch.close()
+    await mock.close()
+  }
+})
+
+test("mid-stream clean close after the first event errors the stream without retry", async () => {
+  const mock = await startMockCodexLb({ mode: "closeEarlyClean" })
+  const wsFetch = createWebSocketFetch({ WebSocketImpl: WebSocket, httpFetch: async () => new Response("HTTP") })
+  try {
+    const res = await wsFetch(mock.responsesUrl, streamingInit("sesM"))
+    await assert.rejects(() => res.text(), /closed before response\.completed/)
+    assert.equal(mock.totalConnections(), 1)
+  } finally {
+    wsFetch.close()
+    await mock.close()
+  }
+})
+
+test("wrapped upstream error becomes a real HTTP response with the original status", async () => {
+  const mock = await startMockCodexLb({ mode: "ok", reply: "OK" })
+  const wsFetch = createWebSocketFetch({ WebSocketImpl: WebSocket, httpFetch: async () => new Response("HTTP") })
+  try {
+    await readAll(await wsFetch(mock.responsesUrl, streamingInit("sesE")))
+    mock.setMode("error429")
+    const res = await wsFetch(mock.responsesUrl, streamingInit("sesE"))
+    assert.equal(res.status, 429)
+    assert.match(await res.text(), /account_stream_cap/)
+    mock.setMode("ok")
+    const text = await readAll(await wsFetch(mock.responsesUrl, streamingInit("sesE")))
+    assert.match(text, /"delta":"OK"/)
+  } finally {
+    wsFetch.close()
+    await mock.close()
+  }
+})
+
+test("idle watcher drops a pooled socket the server closed and the next turn reconnects", async () => {
+  const mock = await startMockCodexLb({ mode: "closeAfterComplete", reply: "OK" })
+  const wsFetch = createWebSocketFetch({ WebSocketImpl: WebSocket, httpFetch: async () => new Response("HTTP") })
+  try {
+    const t1 = await readAll(await wsFetch(mock.responsesUrl, streamingInit("sesW")))
+    assert.match(t1, /"delta":"OK"/)
+    await new Promise((r) => setTimeout(r, 50))
+    assert.equal(mock.connectionCount(), 0)
+    const t2 = await readAll(await wsFetch(mock.responsesUrl, streamingInit("sesW")))
+    assert.match(t2, /"delta":"OK"/)
+    assert.equal(mock.totalConnections(), 2)
+  } finally {
+    wsFetch.close()
+    await mock.close()
+  }
+})
+
+test("cancelling a stream frees the session so the next turn still works", async () => {
+  const mock = await startMockCodexLb({ mode: "ok", reply: "OK" })
+  const wsFetch = createWebSocketFetch({ WebSocketImpl: WebSocket, httpFetch: async () => new Response("HTTP") })
+  try {
+    const res = await wsFetch(mock.responsesUrl, streamingInit("sesC"))
+    await res.body.cancel()
+    const text = await readAll(await wsFetch(mock.responsesUrl, streamingInit("sesC")))
+    assert.match(text, /"delta":"OK"/)
   } finally {
     wsFetch.close()
     await mock.close()

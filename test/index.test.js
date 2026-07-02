@@ -74,6 +74,11 @@ test("chat.headers injects session-id for codex-lb requests only", async () => {
   const other = { headers: {} }
   await hooks["chat.headers"]({ sessionID: "ses1", provider: { info: { id: "anthropic" } }, model: {} }, other)
   assert.equal("session-id" in other.headers, false)
+
+  // Tightened: an unidentifiable provider id must not receive the header either.
+  const none = { headers: {} }
+  await hooks["chat.headers"]({ sessionID: "ses1" }, none)
+  assert.equal("session-id" in none.headers, false)
 })
 
 test("session.deleted removes the pooled socket and dispose closes the pool", async () => {

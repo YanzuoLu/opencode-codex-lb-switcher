@@ -4,9 +4,15 @@
 // Adapted from OpenCode's packages/opencode/src/plugin/openai/ws.ts, rewritten
 // against the WHATWG WebSocket API (globalThis.WebSocket) so it runs on Bun with
 // zero runtime dependencies. The WebSocket constructor is injectable for tests.
+//
+// Client-initiated closes use application close codes:
+//   4000 client abort (request signal aborted)
+//   4001 client cancel (response body stream cancelled)
 
 const PROTOCOL_HEADER = "responses_websockets=2026-02-06"
 const OPEN = 1
+const CLOSE_CODE_ABORT = 4000
+const CLOSE_CODE_CANCEL = 4001
 const encoder = new TextEncoder()
 
 export function toWebSocketUrl(url) {
@@ -31,6 +37,13 @@ export function isAbortError(error) {
   return error instanceof DOMException && error.name === "AbortError"
 }
 
+// Structured diagnostic error: `code` identifies the failure class, extra fields
+// (closeCode, closeReason, wasClean, status, emitted, elapsedMs) let the pool make
+// retry decisions and make logs distinguish pre-first-event from mid-stream deaths.
+function streamError(message, info) {
+  return Object.assign(new Error(message), info)
+}
+
 export function connectResponsesWebSocket({ url, headers = {}, timeout, signal, WebSocketImpl = globalThis.WebSocket }) {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) {
@@ -48,7 +61,7 @@ export function connectResponsesWebSocket({ url, headers = {}, timeout, signal, 
           try {
             socket.close()
           } catch {}
-          reject(new Error("WebSocket connect timed out"))
+          reject(streamError("WebSocket connect timed out", { code: "WS_CONNECT_TIMEOUT" }))
         }, timeout)
       : undefined
 
@@ -70,7 +83,14 @@ export function connectResponsesWebSocket({ url, headers = {}, timeout, signal, 
     }
     function onClose(event) {
       cleanup()
-      reject(new Error(`WebSocket closed before open (code ${event?.code ?? "?"})`))
+      const reason = event?.reason ?? ""
+      reject(
+        streamError(`WebSocket closed before open (code ${event?.code ?? "?"}, reason ${JSON.stringify(reason)})`, {
+          code: "WS_CLOSED",
+          closeCode: event?.code,
+          closeReason: reason,
+        }),
+      )
     }
     function onAbort() {
       cleanup()
@@ -98,38 +118,64 @@ function parseWrappedError(event, body) {
 }
 
 // Streams an OpenAI Responses turn over an already-connected WebSocket and returns
-// a 200 text/event-stream Response. Callbacks let the pool observe lifecycle.
+// a 200 text/event-stream Response. Callbacks let the pool observe lifecycle:
+//   onFirstEvent(wrapped?)  first frame arrived (wrapped error object if it was one)
+//   onComplete(event)       response.completed / response.done
+//   onTerminal(event)       any terminal frame (completed/failed/incomplete/error)
+//   onConnectionInvalid(e)  socket died mid-turn (structured error with closeCode)
+//   onAbort(e)              request signal aborted (socket closed 4000)
+//   onCancel()              response body cancelled by the reader (socket closed 4001)
 export function streamResponsesWebSocket({
   socket,
   body,
-  idleTimeout,
+  inactivityTimeout,
   signal,
   onFirstEvent,
   onComplete,
   onTerminal,
   onConnectionInvalid,
   onAbort,
-  onRetryableTerminal,
+  onCancel,
 }) {
   let controller
   let completed = false
   let emitted = false
-  let idleTimer
+  let inactivityTimer
+  let startedAt
 
-  function clearIdle() {
-    if (idleTimer) clearTimeout(idleTimer)
-    idleTimer = undefined
+  // Progress diagnostics shared by all stream-phase errors: how long the turn has
+  // been running and whether any frame arrived (pre-first-event vs mid-stream).
+  function progressInfo() {
+    const elapsedMs = startedAt === undefined ? undefined : Date.now() - startedAt
+    const parts = [emitted ? "after first event" : "no events"]
+    if (elapsedMs !== undefined) parts.push(`${elapsedMs}ms elapsed`)
+    return { emitted, elapsedMs, text: parts.join(", ") }
   }
-  function resetIdle(message) {
-    if (completed || !idleTimeout) return
-    clearIdle()
-    idleTimer = setTimeout(() => invalidate(new Error(message)), idleTimeout)
+
+  function clearInactivity() {
+    if (inactivityTimer) clearTimeout(inactivityTimer)
+    inactivityTimer = undefined
+  }
+  function resetInactivity(message) {
+    if (completed || !inactivityTimeout) return
+    clearInactivity()
+    inactivityTimer = setTimeout(() => {
+      const progress = progressInfo()
+      invalidate(
+        streamError(`${message} (${progress.text})`, {
+          code: "WS_INACTIVITY",
+          emitted: progress.emitted,
+          elapsedMs: progress.elapsedMs,
+        }),
+      )
+    }, inactivityTimeout)
   }
   function detach() {
-    clearIdle()
+    clearInactivity()
     socket.removeEventListener?.("message", onMessage)
     socket.removeEventListener?.("error", onError)
     socket.removeEventListener?.("close", onClose)
+    signal?.removeEventListener("abort", handleAbort)
   }
   function invalidate(error) {
     if (completed) return
@@ -170,7 +216,7 @@ export function streamResponsesWebSocket({
       detach()
       onTerminal?.(parsed)
       try {
-        controller?.error(new Error(wrapped.message))
+        controller?.error(streamError(wrapped.message, { code: "WS_UPSTREAM_ERROR", status: wrapped.status }))
       } catch {}
       return
     }
@@ -178,7 +224,7 @@ export function streamResponsesWebSocket({
     if (!emitted) onFirstEvent?.()
     emitted = true
     enqueueFrame(text)
-    resetIdle("idle timeout waiting for websocket")
+    resetInactivity("inactivity timeout waiting for websocket frames")
 
     if (!parsed) return
     if (parsed.type === "response.completed" || parsed.type === "response.done") {
@@ -195,18 +241,38 @@ export function streamResponsesWebSocket({
     }
   }
   function onError(event) {
-    invalidate(event?.error instanceof Error ? event.error : new Error(event?.message ?? "WebSocket error"))
+    const error = event?.error instanceof Error ? event.error : new Error(event?.message ?? "WebSocket error")
+    if (error.code === undefined) error.code = "WS_ERROR"
+    const progress = progressInfo()
+    error.message = `${error.message} (${progress.text})`
+    error.emitted = progress.emitted
+    error.elapsedMs = progress.elapsedMs
+    invalidate(error)
   }
   function onClose(event) {
     if (completed) return
-    invalidate(new Error(`WebSocket closed before response.completed (code ${event?.code ?? "?"})`))
+    const reason = event?.reason ?? ""
+    const progress = progressInfo()
+    invalidate(
+      streamError(
+        `WebSocket closed before response.completed (code ${event?.code ?? "?"}, reason ${JSON.stringify(reason)}, ${progress.text})`,
+        {
+          code: "WS_CLOSED",
+          closeCode: event?.code,
+          closeReason: reason,
+          wasClean: event?.wasClean,
+          emitted: progress.emitted,
+          elapsedMs: progress.elapsedMs,
+        },
+      ),
+    )
   }
   function handleAbort() {
     if (completed) return
     completed = true
     detach()
     try {
-      socket.close()
+      socket.close(CLOSE_CODE_ABORT, "client abort")
     } catch {}
     const error = abortError(signal)
     onAbort?.(error)
@@ -219,13 +285,11 @@ export function streamResponsesWebSocket({
     socket.addEventListener("error", onError, { once: true })
     socket.addEventListener("close", onClose, { once: true })
     const { stream: _stream, background: _background, ...payload } = body ?? {}
-    resetIdle("idle timeout sending websocket request")
+    startedAt = Date.now()
+    resetInactivity("inactivity timeout sending websocket request")
     socket.send(JSON.stringify({ type: "response.create", ...payload }))
-    resetIdle("idle timeout waiting for websocket")
+    resetInactivity("inactivity timeout waiting for websocket frames")
   }
-
-  // expose retryable handler hook for the pool (unused in the base path)
-  void onRetryableTerminal
 
   return new Response(
     new ReadableStream({
@@ -237,7 +301,7 @@ export function streamResponsesWebSocket({
         }
         signal?.addEventListener("abort", handleAbort, { once: true })
         if (socket.readyState !== OPEN) {
-          invalidate(new Error("WebSocket is not open"))
+          invalidate(streamError("WebSocket is not open", { code: "WS_NOT_OPEN" }))
           return
         }
         attach()
@@ -247,8 +311,9 @@ export function streamResponsesWebSocket({
         completed = true
         detach()
         try {
-          socket.close()
+          socket.close(CLOSE_CODE_CANCEL, "client cancel")
         } catch {}
+        onCancel?.()
       },
     }),
     { status: 200, headers: { "content-type": "text/event-stream" } },

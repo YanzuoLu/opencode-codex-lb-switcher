@@ -127,6 +127,10 @@ const MODELS = {
 }
 
 export function startMockCodexLb({ port = 0, mode = "ok", reply = "OK" } = {}) {
+  let currentMode = mode
+  let idleClosedOnce = false
+  let lastPayload
+  let totalConnections = 0
   const connections = new Set()
   const server = createServer((req, res) => {
     if (req.method === "GET" && req.url.startsWith("/v1/models")) {
@@ -147,7 +151,7 @@ export function startMockCodexLb({ port = 0, mode = "ok", reply = "OK" } = {}) {
             return {}
           }
         })()
-        if (mode === "error429") {
+        if (currentMode === "error429") {
           res.writeHead(429, { "content-type": "application/json" })
           res.end(JSON.stringify(errorFrame()))
           return
@@ -166,6 +170,7 @@ export function startMockCodexLb({ port = 0, mode = "ok", reply = "OK" } = {}) {
   const wss = new WebSocketServer({ server, path: "/v1/responses" })
   wss.on("connection", (socket, req) => {
     vlog(`[mock] WS connection session-id=${req.headers["session-id"] ?? "(none)"} auth=${req.headers["authorization"] ? "yes" : "no"}`)
+    totalConnections++
     connections.add(socket)
     socket.on("close", () => connections.delete(socket))
     socket.authHeader = req.headers["authorization"] ?? ""
@@ -179,17 +184,44 @@ export function startMockCodexLb({ port = 0, mode = "ok", reply = "OK" } = {}) {
         }
       })()
       if (body?.type !== "response.create") return
-      if (mode === "hang") return
-      if (mode === "error429") {
+      lastPayload = body
+      if (currentMode === "hang") return
+      if (currentMode === "error429") {
         socket.send(JSON.stringify(errorFrame()))
         return
       }
-      if (mode === "closeEarly") {
+      if (currentMode === "close1000PreEvent") {
+        // Clean close before any event: terminal, must not be retried.
+        socket.close(1000, "clean close")
+        return
+      }
+      if (currentMode === "close1001Idle" && !idleClosedOnce) {
+        // One-shot: the request raced an idle socket the server was tearing down
+        // (going away). The next connection behaves normally so a single retry wins.
+        idleClosedOnce = true
+        socket.close(1001, "going away")
+        return
+      }
+      if (currentMode === "terminate1006Idle" && !idleClosedOnce) {
+        // One-shot abnormal closure: 1005/1006 cannot be sent in a close frame, so
+        // terminate() makes the client synthesize close code 1006. Next connection
+        // behaves normally so a single retry wins.
+        idleClosedOnce = true
+        socket.terminate()
+        return
+      }
+      if (currentMode === "closeEarly") {
         socket.send(JSON.stringify({ type: "response.created", response: { id: "resp_mock_1", object: "response", status: "in_progress" } }))
         setTimeout(() => socket.terminate(), 20)
         return
       }
+      if (currentMode === "closeEarlyClean") {
+        socket.send(JSON.stringify({ type: "response.created", response: { id: "resp_mock_1", object: "response", status: "in_progress" } }))
+        setTimeout(() => socket.close(1000, "early clean close"), 20)
+        return
+      }
       for (const frame of okFrames(body, reply)) socket.send(JSON.stringify(frame))
+      if (currentMode === "closeAfterComplete") socket.close(1000, "server done")
     })
   })
 
@@ -202,6 +234,12 @@ export function startMockCodexLb({ port = 0, mode = "ok", reply = "OK" } = {}) {
         wsUrl: `ws://127.0.0.1:${actual}/v1/responses`,
         responsesUrl: `http://127.0.0.1:${actual}/v1/responses`,
         connectionCount: () => connections.size,
+        totalConnections: () => totalConnections,
+        lastPayload: () => lastPayload,
+        setMode(next) {
+          currentMode = next
+          idleClosedOnce = false
+        },
         async close() {
           for (const s of connections) s.terminate()
           wss.close()

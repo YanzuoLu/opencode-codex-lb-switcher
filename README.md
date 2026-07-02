@@ -84,8 +84,18 @@ the plugin options.
 - **Fail-closed errors**: codex-lb degraded states (e.g. `429 account_stream_cap`,
   "No available accounts") arrive as WebSocket `error` frames and are surfaced as a
   real error in OpenCode instead of a silent, empty turn.
-- **Lifecycle**: sockets are closed on `dispose` and dropped per session on
-  `session.deleted`.
+- **Lifecycle**: while a turn is streaming, the bridge owns the socket; between
+  turns ownership hands back to a pool watcher that drops the pooled socket if the
+  server closes it, so the next turn transparently reconnects. Idle sockets are
+  pruned after 90s (`poolIdleTimeout`); a running stream that receives no frames
+  for 5 minutes is invalidated (`streamInactivityTimeout`). If the server closes
+  the socket cleanly before the first event of a turn (close code 1001/1005/1006),
+  the turn is retried once on a fresh socket without counting as a stream failure;
+  a pre-event 1000 close is terminal and never retried. Upstream error frames that
+  carry an HTTP status (e.g. `429 account_stream_cap`) are returned as a real HTTP
+  response with that status. Client-initiated closes use application close codes:
+  4000 (request aborted), 4001 (stream cancelled), 4002 (pool invalidate). Sockets
+  are closed on `dispose` and dropped per session on `session.deleted`.
 
 ## Migrating from 0.1.x
 
@@ -106,7 +116,7 @@ Unit tests run against a local mock codex-lb (`test/helpers/mock-codex-lb.js`), 
 also runs standalone for manual end-to-end checks:
 
 ```bash
-node test/helpers/mock-codex-lb.js 8531 ok "HELLO"   # ok | error429 | closeEarly | hang
+node test/helpers/mock-codex-lb.js 8531 ok "HELLO"   # ok | error429 | closeEarly | closeEarlyClean | close1000PreEvent | close1001Idle | terminate1006Idle | closeAfterComplete | hang
 ```
 
 ## Releases
