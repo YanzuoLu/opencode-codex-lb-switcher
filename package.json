@@ -1,6 +1,6 @@
 {
   "name": "opencode-codex-lb-switcher",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "OpenCode provider that routes the OpenAI Responses API through codex-lb over WebSocket.",
   "type": "module",
   "main": "./index.js",
